@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * Standalone CLI entry point: `npx pixel-agents`
+ * Standalone CLI entry point: `npx bitteul-desk`
  *
  * Starts the Fastify server in standalone mode with SPA serving and WebSocket.
  * Loads all assets (PNGs -> SpriteData) on startup and caches in memory.
  * Each connecting WebSocket client receives the full state on webviewReady.
  */
 
+import { spawn } from 'child_process';
 import * as path from 'path';
 
 import { AgentRuntime } from './agentRuntime.js';
@@ -37,6 +38,8 @@ export interface CliArgs {
    *  can run at once without a collision. --port picks a fixed one. */
   port?: number;
   host: string;
+  /** Open the office in the default browser once the server is up. */
+  open: boolean;
 }
 
 /** Thrown by parseArgs on an invalid --port. Kept separate from process.exit so
@@ -45,7 +48,7 @@ export interface CliArgs {
 export class CliArgsError extends Error {}
 
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { host: '127.0.0.1' };
+  const args: CliArgs = { host: '127.0.0.1', open: true };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port' || argv[i] === '-p') {
       const raw = argv[i + 1];
@@ -65,17 +68,35 @@ export function parseArgs(argv: string[]): CliArgs {
     } else if (argv[i] === '--host' && argv[i + 1]) {
       args.host = argv[i + 1];
       i++;
+    } else if (argv[i] === '--no-open') {
+      args.open = false;
     } else if (argv[i] === '--help') {
-      console.log(`Usage: pixel-agents [options]
+      console.log(`Usage: bitteul-desk [options]
 
 Options:
   --port, -p <number>   Port to listen on (default: OS-assigned ephemeral port)
   --host <string>       Host to bind to (default: 127.0.0.1)
+  --no-open             Do not open the office in the browser on start
   --help                Show this help message`);
       process.exit(0);
     }
   }
   return args;
+}
+
+/** Hand a URL to the OS default browser without going through a shell. */
+function openInBrowser(url: string): void {
+  const [cmd, cmdArgs] =
+    process.platform === 'win32'
+      ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
+      : process.platform === 'darwin'
+        ? ['open', [url]]
+        : ['xdg-open', [url]];
+  const child = spawn(cmd, cmdArgs, { detached: true, stdio: 'ignore' });
+  child.on('error', (err) => {
+    console.error(`[Bitteul Desk] Could not open a browser (${cmd}): ${err.message}`);
+  });
+  child.unref();
 }
 
 // ── Hooks consent ─────────────────────────────────────────────
@@ -302,9 +323,14 @@ async function main(): Promise<void> {
     // address; only the consent-bearing toggle needs the token.
     const displayHost =
       args.host === '0.0.0.0' || args.host === '::' || args.host === '' ? '127.0.0.1' : args.host;
+    const base = `http://${displayHost}:${config.port}`;
+    const officeUrl = `${base}/scene.html?token=${config.token}`;
+    console.log(`\n  Bitteul Desk office:  ${officeUrl}`);
+    console.log(`  Classic Pixel Agents: ${base}/?token=${config.token}`);
     console.log(
-      `\n  Pixel Agents server running at http://${displayHost}:${config.port}/?token=${config.token}\n`,
+      '  (The token in these links lets a page reply to your agents. Keep it private.)\n',
     );
+    if (args.open) openInBrowser(officeUrl);
 
     // ── Graceful shutdown ──
     function shutdown(): void {
