@@ -20,6 +20,7 @@ import {
   BUBBLE_TEXT,
   CARRY_SCALE,
   CODE_SCROLL_MS,
+  COMPACT_MAX_WIDTH_PX,
   DRAG_SLOP_PX,
   DROP_FILL,
   FONT_BIG,
@@ -35,6 +36,7 @@ import {
   LONG_PRESS_MS,
   READ_FRAME_MS,
   ROOM_TIME_SHIFT_MS,
+  SAME_TAB_CHAT_MEDIA,
   SCENE_PAGE_BG,
   SCREEN_ALERT_BG,
   SCREEN_ALERT_FG,
@@ -105,11 +107,13 @@ interface SceneLayout {
 type StaffFrames = Record<Pose, HTMLImageElement[][]>;
 const STAFF_FRAMES = ['a', 'b', 'c', 'd', 'e', 'f'];
 
-interface Company {
-  deadline: string;
-  salaryTarget: number;
-  salaryThisMonth: number;
+interface Board {
+  title: string;
+  countdown: { label: string; date: string } | null;
+  salary: { thisMonth: number; target: number } | null;
 }
+
+const DEFAULT_BOARD: Board = { title: '빛뜰 데스크', countdown: null, salary: null };
 
 interface Tool {
   name?: string;
@@ -147,6 +151,17 @@ async function loadJson<T>(src: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** The wall board comes from the user's desk profile; a broken profile falls back to defaults. */
+async function loadBoard(): Promise<Board> {
+  try {
+    return (await loadJson<{ board: Board }>('./api/scene/profile')).board;
+  } catch (err) {
+    console.error('[Scene] desk profile failed', err);
+    showToast(`벽 게시판 설정을 읽지 못해 기본값으로 보여요. ${String(err)}`);
+    return DEFAULT_BOARD;
+  }
+}
+
 function ensureAgent(id: number, palette = 0): Agent {
   let a = agents.get(id);
   if (!a) {
@@ -156,8 +171,37 @@ function ensureAgent(id: number, palette = 0): Agent {
   return a;
 }
 
+/** Whether the server adopts sessions from every project folder, as last reported. */
+let watchAll: boolean | null = null;
+/** Only a tokened (privileged) viewer gets the folder-scope toggle. */
+let scopeEnabled = false;
+
+function renderScope(): void {
+  const btn = document.getElementById('scope');
+  if (!btn) return;
+  btn.hidden = !scopeEnabled || watchAll === null;
+  btn.textContent = watchAll ? '모든 폴더 보는 중' : '이 폴더만 보는 중';
+  btn.dataset.on = String(watchAll === true);
+}
+
+function toggleScope(): void {
+  if (watchAll === null) return;
+  watchAll = !watchAll;
+  transport.send({ type: 'setWatchAllSessions', enabled: watchAll });
+  renderScope();
+  showToast(
+    watchAll
+      ? '다른 폴더의 세션도 불러와요. 최근 10분 안에 움직인 세션이 몇 초 안에 나타나요.'
+      : '이제 이 폴더의 새 세션만 불러와요.',
+  );
+}
+
 function handle(msg: ServerMessage): void {
   switch (msg.type) {
+    case 'settingsLoaded':
+      watchAll = msg.watchAllSessions;
+      renderScope();
+      break;
     case 'existingAgents':
       for (const id of msg.agents) ensureAgent(id, msg.agentMeta[String(id)]?.palette ?? 0);
       break;
@@ -220,7 +264,7 @@ function moodOf(a: Agent): Mood {
 
 function labelOf(a: Agent): string {
   const mood = moodOf(a);
-  if (mood === 'alert') return '대표님 승인 기다리는 중';
+  if (mood === 'alert') return '승인 기다리는 중';
   if (mood === 'resting') return '보고 끝, 대기 중';
   const tool = currentTool(a);
   return tool ? toolLabel(tool.name, tool.status) : '생각하는 중';
@@ -442,12 +486,7 @@ function won(n: number): string {
   return `${n.toLocaleString('ko-KR')}원`;
 }
 
-function drawWallContent(
-  company: Company,
-  working: number,
-  w: number,
-  h: number,
-): HTMLCanvasElement {
+function drawWallContent(board: Board, working: number, w: number, h: number): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
@@ -461,45 +500,54 @@ function drawWallContent(
   const mid = w / 2;
   ctx.fillStyle = WALL_TITLE;
   ctx.font = FONT_BOLD;
-  ctx.fillText('빛뜰 컴퍼니', mid, 12);
+  ctx.fillText(board.title, mid, 12);
+  let y = 44;
+  if (board.countdown) {
+    ctx.fillStyle = WALL_LABEL;
+    ctx.font = FONT_SMALL;
+    ctx.fillText(board.countdown.label, mid, y);
+    ctx.fillStyle = WALL_ACCENT;
+    ctx.font = FONT_BIG;
+    ctx.fillText(`D-${daysUntil(board.countdown.date)}`, mid, y + 14);
+    y += 60;
+  }
+  if (board.salary) {
+    ctx.fillStyle = WALL_LABEL;
+    ctx.font = FONT_SMALL;
+    ctx.fillText('이번 달 월급', mid, y);
+    ctx.fillStyle = WALL_VALUE;
+    ctx.font = FONT_BOLD;
+    ctx.fillText(won(board.salary.thisMonth), mid, y + 14);
+    const barW = w - 16;
+    const ratio = Math.min(1, board.salary.thisMonth / board.salary.target);
+    ctx.fillStyle = WALL_GAUGE_TRACK;
+    ctx.fillRect(8, y + 34, barW, 8);
+    ctx.fillStyle = WALL_GAUGE_FILL;
+    ctx.fillRect(8, y + 34, Math.round(barW * ratio), 8);
+    ctx.fillStyle = WALL_LABEL;
+    ctx.font = FONT_SMALL;
+    ctx.fillText(`목표 ${won(board.salary.target)}`, mid, y + 48);
+    y += 84;
+  }
   ctx.fillStyle = WALL_LABEL;
   ctx.font = FONT_SMALL;
-  ctx.fillText('복학까지', mid, 44);
-  ctx.fillStyle = WALL_ACCENT;
-  ctx.font = FONT_BIG;
-  ctx.fillText(`D-${daysUntil(company.deadline)}`, mid, 58);
-  ctx.fillStyle = WALL_LABEL;
-  ctx.font = FONT_SMALL;
-  ctx.fillText('이번 달 월급', mid, 104);
-  ctx.fillStyle = WALL_VALUE;
-  ctx.font = FONT_BOLD;
-  ctx.fillText(won(company.salaryThisMonth), mid, 118);
-  const barW = w - 16;
-  const ratio = Math.min(1, company.salaryThisMonth / company.salaryTarget);
-  ctx.fillStyle = WALL_GAUGE_TRACK;
-  ctx.fillRect(8, 138, barW, 8);
-  ctx.fillStyle = WALL_GAUGE_FILL;
-  ctx.fillRect(8, 138, Math.round(barW * ratio), 8);
-  ctx.fillStyle = WALL_LABEL;
-  ctx.font = FONT_SMALL;
-  ctx.fillText(`목표 ${won(company.salaryTarget)}`, mid, 152);
-  ctx.fillText('근무 중인 직원', mid, 188);
+  ctx.fillText('근무 중인 직원', mid, y);
   ctx.fillStyle = WALL_VALUE;
   ctx.font = FONT_BODY;
-  ctx.fillText(`${working}명 (AI)`, mid, 202);
+  ctx.fillText(`${working}명 (AI)`, mid, y + 14);
   return c;
 }
 
 function drawWall(
   ctx: CanvasRenderingContext2D,
   layout: SceneLayout,
-  company: Company,
+  board: Board,
   working: number,
 ): void {
   const q = layout.wall;
   const w = q.x1 - q.x0 + 1;
   const h = q.y1 - q.y0 + 1;
-  const content = drawWallContent(company, working, w, h);
+  const content = drawWallContent(board, working, w, h);
   for (let i = 0; i < w; i++) {
     const t = i / (w - 1);
     const top = q.y0 + (q.y2 - q.y0) * t;
@@ -592,6 +640,10 @@ function showToast(message: string, link?: { href: string; label: string }): voi
 }
 
 function openChat(token: string, sessionId: string | null): void {
+  if (window.matchMedia(SAME_TAB_CHAT_MEDIA).matches) {
+    window.location.assign(chatUrl(token, sessionId));
+    return;
+  }
   if (openChatWindow(token, sessionId)) return;
   showToast('브라우저가 대화 창(팝업)을 막았어요.', {
     href: chatUrl(token, sessionId),
@@ -601,9 +653,9 @@ function openChat(token: string, sessionId: string | null): void {
 
 async function start(): Promise<void> {
   document.body.style.background = SCENE_PAGE_BG;
-  const [layout, company, bg, front] = await Promise.all([
+  const [layout, board, bg, front] = await Promise.all([
     loadJson<SceneLayout>('./scene/scene.json'),
-    loadJson<Company>('./scene/company.json'),
+    loadBoard(),
     loadImage('./scene/background.png'),
     loadImage('./scene/front.png'),
     document.fonts.load(FONT_BODY),
@@ -644,17 +696,25 @@ async function start(): Promise<void> {
   const roomH = layout.height;
   const perRoom = layout.seats.length;
   const perFloor = perRoom * layout.rooms;
-  const totalW = roomW * layout.rooms;
   let floors = 1;
+  let cols = layout.rooms;
+  let sceneW = roomW * cols;
+  let sceneH = roomH;
 
   function fit(): void {
     if (!canvas) return;
-    const scale = Math.min(window.innerWidth / totalW, window.innerHeight / roomH);
+    const compact = window.innerWidth < COMPACT_MAX_WIDTH_PX;
+    cols = compact ? 1 : layout.rooms;
+    sceneW = roomW * cols;
+    sceneH = roomH * ((floors * layout.rooms) / cols);
+    const scale = compact
+      ? window.innerWidth / sceneW
+      : Math.min(window.innerWidth / sceneW, window.innerHeight / roomH);
     const factor = Math.max(1, Math.round(scale * window.devicePixelRatio));
-    canvas.width = totalW * factor;
-    canvas.height = roomH * floors * factor;
-    canvas.style.width = `${Math.floor(totalW * scale)}px`;
-    canvas.style.height = `${Math.floor(roomH * floors * scale)}px`;
+    canvas.width = sceneW * factor;
+    canvas.height = sceneH * factor;
+    canvas.style.width = `${Math.floor(sceneW * scale)}px`;
+    canvas.style.height = `${Math.floor(sceneH * scale)}px`;
   }
   fit();
   window.addEventListener('resize', fit);
@@ -710,13 +770,16 @@ async function start(): Promise<void> {
     void pollAgents();
     window.setInterval(() => void pollAgents(), TITLE_POLL_MS);
     hire?.addEventListener('click', () => openChat(token, null));
+    scopeEnabled = true;
+    renderScope();
+    document.getElementById('scope')?.addEventListener('click', toggleScope);
   }
 
   const toScene = (ev: { clientX: number; clientY: number }): [number, number] => {
     const rect = canvas.getBoundingClientRect();
     return [
-      ((ev.clientX - rect.left) / rect.width) * totalW,
-      ((ev.clientY - rect.top) / rect.height) * roomH * floors,
+      ((ev.clientX - rect.left) / rect.width) * sceneW,
+      ((ev.clientY - rect.top) / rect.height) * sceneH,
     ];
   };
   const inside = (boxes: HitBox[], x: number, y: number): HitBox | undefined =>
@@ -728,8 +791,8 @@ async function start(): Promise<void> {
   const editSign = (zone: HitBox): void => {
     if (!token) return;
     const rect = canvas.getBoundingClientRect();
-    const sx = rect.width / totalW;
-    const sy = rect.height / (roomH * floors);
+    const sx = rect.width / sceneW;
+    const sy = rect.height / sceneH;
     const input = document.createElement('input');
     input.className = 'sign-input';
     input.maxLength = 40;
@@ -832,6 +895,15 @@ async function start(): Promise<void> {
     const sign = token ? inside(signZones, x, y) : undefined;
     if (sign) editSign(sign);
   });
+  // Touch: once a long press has picked someone up, the finger drags them, not the page.
+  canvas.addEventListener(
+    'touchmove',
+    (ev) => {
+      if (drag) ev.preventDefault();
+    },
+    { passive: false },
+  );
+  canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
   canvas.addEventListener('pointercancel', () => {
     if (press) window.clearTimeout(press.timer);
     press = null;
@@ -852,7 +924,7 @@ async function start(): Promise<void> {
       floors = plan.floors;
       fit();
     }
-    const factor = canvas.width / totalW;
+    const factor = canvas.width / sceneW;
     const working = ordered.filter((a) => moodOf(a) !== 'resting').length;
     const bubbles: Array<[number, number, string, boolean]> = [];
     const hits: HitBox[] = [];
@@ -879,8 +951,8 @@ async function start(): Promise<void> {
     for (let floor = 0; floor < floors; floor++) {
       for (let room = 0; room < layout.rooms; room++) {
         const globalRoom = floor * layout.rooms + room;
-        offsetX = room * roomW;
-        offsetY = floor * roomH;
+        offsetX = (globalRoom % cols) * roomW;
+        offsetY = Math.floor(globalRoom / cols) * roomH;
         const roomT = t + globalRoom * ROOM_TIME_SHIFT_MS;
         ctx.setTransform(factor, 0, 0, factor, offsetX * factor, offsetY * factor);
         ctx.drawImage(bg, 0, 0);
@@ -936,7 +1008,7 @@ async function start(): Promise<void> {
             ]);
           });
         ambient.drawFront(ctx, roomT);
-        if (globalRoom === 0) drawWall(ctx, layout, company, working);
+        if (globalRoom === 0) drawWall(ctx, layout, board, working);
         const sign = drawSign(ctx, roomW, roomTitles.get(globalRoom), !!token);
         if (sign) {
           signs.push({

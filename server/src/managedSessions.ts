@@ -176,7 +176,7 @@ export class ManagedSessions {
     ask.resolve(
       allow
         ? { behavior: 'allow' }
-        : { behavior: 'deny', message: '대표님이 대시보드에서 거부했습니다.' },
+        : { behavior: 'deny', message: '사용자가 대시보드에서 거부했습니다.' },
     );
   }
 

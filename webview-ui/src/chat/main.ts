@@ -19,6 +19,11 @@ import {
 const CONVERSATION_POLL_MS = 1500;
 const AGENTS_POLL_MS = 2000;
 const STICK_TO_BOTTOM_PX = 120;
+/** A run of this many tool calls or more folds into one line. */
+const TOOL_FOLD_MIN = 3;
+const DEFAULT_USER_NAME = '나';
+/** On touch keyboards Enter makes a new line; the send button sends. */
+const TOUCH_MEDIA = '(pointer: coarse)';
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get('token') ?? '';
@@ -39,11 +44,16 @@ const noteEl = byId<HTMLParagraphElement>('note');
 const input = byId<HTMLTextAreaElement>('input');
 const sendBtn = byId<HTMLButtonElement>('send');
 const errorEl = byId<HTMLParagraphElement>('error');
+const backEl = byId<HTMLAnchorElement>('back');
 
 let meta: AgentMeta | undefined;
 let lastSignature = '';
 let lastAsks = '';
 let sending = false;
+let userName = DEFAULT_USER_NAME;
+let profileError = '';
+/** Folded tool runs the user opened, keyed by their first entry, so polling keeps them open. */
+const openRuns = new Set<string>();
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -76,7 +86,7 @@ function renderEntry(entry: ConversationEntry): HTMLElement {
     return row;
   }
   const head = el('div', 'msg-head');
-  head.append(el('span', 'msg-who', entry.kind === 'user' ? '대표님' : '직원'));
+  head.append(el('span', 'msg-who', entry.kind === 'user' ? userName : '직원'));
   if (time) head.append(el('span', 'msg-time', time));
   const body = el('div', 'msg-body');
   if (entry.kind === 'assistant') body.innerHTML = markdown(entry.text);
@@ -85,9 +95,53 @@ function renderEntry(entry: ConversationEntry): HTMLElement {
   return row;
 }
 
+function renderToolRun(run: ConversationEntry[]): HTMLElement[] {
+  if (run.length < TOOL_FOLD_MIN) return run.map(renderEntry);
+  const key = `${run[0].timestamp ?? ''}|${run[0].text}`;
+  const box = el('details', 'tools');
+  box.open = openRuns.has(key);
+  box.addEventListener('toggle', () => {
+    if (box.open) openRuns.add(key);
+    else openRuns.delete(key);
+  });
+  const summary = el('summary', '');
+  summary.append(
+    el('span', 'tools-count', `도구 ${run.length}번 사용`),
+    el('span', 'tools-last', `마지막: ${run[run.length - 1].text}`),
+  );
+  box.append(summary, ...run.map(renderEntry));
+  return [box];
+}
+
+function renderLog(entries: ConversationEntry[]): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  let run: ConversationEntry[] = [];
+  for (const entry of entries) {
+    if (entry.kind === 'tool') {
+      run.push(entry);
+      continue;
+    }
+    out.push(...renderToolRun(run), renderEntry(entry));
+    run = [];
+  }
+  out.push(...renderToolRun(run));
+  return out;
+}
+
+async function loadUserName(): Promise<void> {
+  try {
+    const res = await fetch('./api/scene/profile');
+    if (!res.ok) throw new Error(`GET ./api/scene/profile -> ${res.status} ${await res.text()}`);
+    userName = ((await res.json()) as { userName: string }).userName;
+  } catch (err) {
+    profileError = `사용자 설정을 읽지 못해 기본 이름으로 보여요: ${String(err)}`;
+    errorEl.textContent = profileError;
+  }
+}
+
 function setTitle(text: string): void {
   titleEl.textContent = text;
-  document.title = `${text} · 빛뜰 컴퍼니`;
+  document.title = `${text} · 빛뜰 데스크`;
 }
 
 function renderStatus(): void {
@@ -178,14 +232,14 @@ async function pollConversation(): Promise<void> {
     errorEl.textContent = `대화를 불러오지 못했습니다: ${String(err)}`;
     return;
   }
-  errorEl.textContent = '';
+  errorEl.textContent = profileError;
   if (data.title) setTitle(data.title);
   const last = data.entries[data.entries.length - 1];
   const signature = `${data.entries.length}:${last?.text.length ?? 0}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
   const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < STICK_TO_BOTTOM_PX;
-  logEl.replaceChildren(...data.entries.map(renderEntry));
+  logEl.replaceChildren(...renderLog(data.entries));
   if (nearBottom) logEl.scrollTop = logEl.scrollHeight;
 }
 
@@ -208,7 +262,7 @@ async function send(): Promise<void> {
       await postJson(`./api/dashboard/agents/${meta.id}/messages`, token, { text });
     }
     input.value = '';
-    errorEl.textContent = '';
+    errorEl.textContent = profileError;
   } catch (err) {
     errorEl.textContent = `보내지 못했습니다: ${String(err)}`;
   } finally {
@@ -219,6 +273,7 @@ async function send(): Promise<void> {
 }
 
 input.addEventListener('keydown', (ev) => {
+  if (window.matchMedia(TOUCH_MEDIA).matches) return;
   if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
     ev.preventDefault();
     void send();
@@ -232,9 +287,12 @@ if (!token) {
   input.disabled = true;
   sendBtn.disabled = true;
 } else {
+  backEl.href = `./scene.html?${new URLSearchParams({ token }).toString()}`;
   setTitle(creating ? '새 직원 부르기' : '불러오는 중…');
   renderStatus();
-  void pollAgents().then(() => pollConversation());
+  void loadUserName()
+    .then(() => pollAgents())
+    .then(() => pollConversation());
   window.setInterval(() => void pollAgents(), AGENTS_POLL_MS);
   window.setInterval(() => void pollConversation(), CONVERSATION_POLL_MS);
   input.focus();

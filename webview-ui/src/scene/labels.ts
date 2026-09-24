@@ -18,7 +18,7 @@ const PLAIN_TOOLS: Record<string, string> = {
   WebSearch: '웹 검색 중',
   Task: '동료 부르는 중',
   Agent: '동료 부르는 중',
-  AskUserQuestion: '대표님 답 기다리는 중',
+  AskUserQuestion: '답 기다리는 중',
   EnterPlanMode: '계획 세우는 중',
   ExitPlanMode: '계획 보고 중',
   NotebookEdit: '노트북 고치는 중',

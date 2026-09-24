@@ -21,6 +21,7 @@ import {
   WS_CLOSE_UNAUTHORIZED,
 } from './constants.js';
 import { ConversationCache } from './conversationView.js';
+import { DeskProfileError, readDeskProfile } from './deskProfile.js';
 import {
   DashboardSessionError,
   ManagedSessions,
@@ -55,6 +56,8 @@ export interface HttpServerOptions {
   onReloadAssets?: ReloadAssetsSideEffect;
   /** Where the Bitteul scene arrangement is stored. Standalone defaults to ~/.pixel-agents. */
   sceneStateFile?: string;
+  /** Where the user's desk profile (name, wall board) is read from. Defaults to ~/.pixel-agents. */
+  deskProfileFile?: string;
 }
 
 /** Result of createHttpServer(). */
@@ -275,6 +278,15 @@ function registerSceneRoutes(app: FastifyInstance, options: HttpServerOptions): 
       }
     }
     return { seats, rooms: scene?.rooms() ?? {} };
+  });
+
+  app.get('/api/scene/profile', async (_request, reply) => {
+    try {
+      return readDeskProfile(options.deskProfileFile);
+    } catch (err) {
+      if (!(err instanceof DeskProfileError)) throw err;
+      return reply.code(500).send({ error: err.message });
+    }
   });
 
   app.post<{ Body: { moves: Array<{ agentId: number; seat: number }> } }>(

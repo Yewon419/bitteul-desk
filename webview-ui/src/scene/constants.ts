@@ -86,6 +86,10 @@ export const SELECT_MARK = '#ffd166';
 
 export const LONG_PRESS_MS = 350;
 export const DRAG_SLOP_PX = 8;
+/** Below this viewport width the rooms stack in one column and fill the width. */
+export const COMPACT_MAX_WIDTH_PX = 900;
+/** Phones and tablets open a chat in the same tab instead of a popup window. */
+export const SAME_TAB_CHAT_MEDIA = '(max-width: 900px), (pointer: coarse)';
 export const CARRY_SCALE = 1.15;
 export const SEAT_ZONE_PAD = 20;
 export const SEAT_ZONE_BELOW = 110;

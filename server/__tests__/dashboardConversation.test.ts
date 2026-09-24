@@ -75,6 +75,7 @@ describe('dashboard routes', () => {
       token: TOKEN,
       store,
       sceneStateFile: path.join(dir, 'scene.json'),
+      deskProfileFile: path.join(dir, 'profile.json'),
     });
   });
 
@@ -154,5 +155,39 @@ describe('dashboard routes', () => {
       seats: Record<string, number>;
     };
     expect(saved.seats).toEqual({ session: 4 });
+  });
+
+  it('serves neutral profile defaults, then the user file, and names a broken file', async () => {
+    const profile = async () => {
+      const res = await fetch(url('/api/scene/profile'));
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    };
+    expect(await profile()).toEqual({
+      status: 200,
+      body: { userName: '나', board: { title: '빛뜰 데스크', countdown: null, salary: null } },
+    });
+
+    const file = path.join(dir, 'profile.json');
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ userName: ' 팀장님 ', countdownDate: '2027-08-31', salaryTarget: 100 }),
+    );
+    expect(await profile()).toEqual({
+      status: 200,
+      body: {
+        userName: '팀장님',
+        board: {
+          title: '빛뜰 데스크',
+          countdown: { label: '마감까지', date: '2027-08-31' },
+          salary: { thisMonth: 0, target: 100 },
+        },
+      },
+    });
+
+    fs.writeFileSync(file, JSON.stringify({ countdownDate: '다음 달' }));
+    const broken = await profile();
+    expect(broken.status).toBe(500);
+    expect(String(broken.body.error)).toContain('countdownDate');
+    expect(String(broken.body.error)).toContain(file);
   });
 });

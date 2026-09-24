@@ -9,6 +9,7 @@
  */
 
 import { spawn } from 'child_process';
+import * as os from 'os';
 import * as path from 'path';
 
 import { AgentRuntime } from './agentRuntime.js';
@@ -28,6 +29,12 @@ import {
 } from './configPersistence.js';
 import { MAX_PORT, MIN_PORT } from './constants.js';
 import { FileStateAdapter } from './fileStateAdapter.js';
+import {
+  loadOrCreatePhoneToken,
+  phoneAddresses,
+  phoneTokenPath,
+  printPhoneLinks,
+} from './phoneAccess.js';
 import { claudeProvider, copyHookScript, hookProviderById } from './providers/index.js';
 import { PixelAgentsServer } from './server.js';
 
@@ -40,6 +47,8 @@ export interface CliArgs {
   host: string;
   /** Open the office in the default browser once the server is up. */
   open: boolean;
+  /** Listen on the network with a persistent token and print phone links. */
+  phone: boolean;
 }
 
 /** Thrown by parseArgs on an invalid --port. Kept separate from process.exit so
@@ -48,7 +57,8 @@ export interface CliArgs {
 export class CliArgsError extends Error {}
 
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { host: '127.0.0.1', open: true };
+  const args: CliArgs = { host: '127.0.0.1', open: true, phone: false };
+  let hostGiven = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port' || argv[i] === '-p') {
       const raw = argv[i + 1];
@@ -67,9 +77,12 @@ export function parseArgs(argv: string[]): CliArgs {
       i++;
     } else if (argv[i] === '--host' && argv[i + 1]) {
       args.host = argv[i + 1];
+      hostGiven = true;
       i++;
     } else if (argv[i] === '--no-open') {
       args.open = false;
+    } else if (argv[i] === '--phone') {
+      args.phone = true;
     } else if (argv[i] === '--help') {
       console.log(`Usage: bitteul-desk [options]
 
@@ -77,10 +90,14 @@ Options:
   --port, -p <number>   Port to listen on (default: OS-assigned ephemeral port)
   --host <string>       Host to bind to (default: 127.0.0.1)
   --no-open             Do not open the office in the browser on start
+  --phone               Reach the office from a phone: listen on the network
+                        (unless --host is given), keep one token across
+                        restarts, and print phone links with a QR code
   --help                Show this help message`);
       process.exit(0);
     }
   }
+  if (args.phone && !hostGiven) args.host = '0.0.0.0';
   return args;
 }
 
@@ -248,6 +265,9 @@ async function main(): Promise<void> {
       console.log('[Pixel Agents] Assets reloaded (external directory change)');
     };
 
+    const phoneToken = args.phone
+      ? loadOrCreatePhoneToken(phoneTokenPath(os.homedir()))
+      : undefined;
     const config = await server.start({
       store,
       runtime,
@@ -258,6 +278,7 @@ async function main(): Promise<void> {
       assetCache,
       onSetHooksEnabled,
       onReloadAssets,
+      token: phoneToken,
     });
     currentConfig = { port: config.port, token: config.token };
 
@@ -330,6 +351,15 @@ async function main(): Promise<void> {
     console.log(
       '  (The token in these links lets a page reply to your agents. Keep it private.)\n',
     );
+    if (args.phone) {
+      if (config.pid !== process.pid) {
+        console.log(
+          `  Phone mode is OFF: a Bitteul Desk server is already running (PID ${config.pid}) and was reused.\n  Stop it, then start again with --phone.\n`,
+        );
+      } else {
+        await printPhoneLinks(phoneAddresses(os.networkInterfaces()), config.port, config.token);
+      }
+    }
     if (args.open) openInBrowser(officeUrl);
 
     // ── Graceful shutdown ──
