@@ -89,6 +89,7 @@ jobs:
 
   publish-npm:
     name: Verify and Publish npm Package
+    if: ${{ github.repository == 'pixel-agents-hq/pixel-agents' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
