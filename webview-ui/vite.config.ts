@@ -124,6 +124,13 @@ export default defineConfig({
   build: {
     outDir: '../dist/webview',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        scene: path.resolve(__dirname, 'scene.html'),
+        chat: path.resolve(__dirname, 'chat.html'),
+      },
+    },
   },
   base: './',
 });

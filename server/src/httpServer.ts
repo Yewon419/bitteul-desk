@@ -4,6 +4,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import * as crypto from 'crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
+import * as path from 'path';
 
 import type { AgentRuntime } from './agentRuntime.js';
 import type { AgentStateStore } from './agentStateStore.js';
@@ -19,6 +20,13 @@ import {
   WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_CLOSE_UNAUTHORIZED,
 } from './constants.js';
+import { ConversationCache } from './conversationView.js';
+import {
+  DashboardSessionError,
+  ManagedSessions,
+  resolveClaudeExecutable,
+} from './managedSessions.js';
+import { MAX_ROOM_TITLE, SceneState } from './sceneState.js';
 import type { AgentState } from './types.js';
 
 /** Options for creating the HTTP + WebSocket server. */
@@ -45,6 +53,8 @@ export interface HttpServerOptions {
   onSetHooksEnabled?: SetHooksEnabledSideEffect;
   /** Invoked when an external asset directory is added/removed. Standalone reloads + re-broadcasts assets here. */
   onReloadAssets?: ReloadAssetsSideEffect;
+  /** Where the Bitteul scene arrangement is stored. Standalone defaults to ~/.pixel-agents. */
+  sceneStateFile?: string;
 }
 
 /** Result of createHttpServer(). */
@@ -87,6 +97,8 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
   registerHealthRoute(app);
   registerHookRoute(app, options);
   registerWebSocketRoute(app, options);
+  registerDashboardRoutes(app, options);
+  registerSceneRoutes(app, options);
 
   // ── Listen ──────────────────────────────────────────────────
 
@@ -138,6 +150,237 @@ function registerHookRoute(app: FastifyInstance, options: HttpServerOptions): vo
       reply.send('ok');
     },
   );
+}
+
+// ── Dashboard (Bitteul) ─────────────────────────────────────────
+
+const DASHBOARD_MAX_ENTRIES = 300;
+
+/**
+ * Read-only conversation access for the scene dashboard. Transcripts hold the user's
+ * full conversations, so both routes demand the server token (Bearer), same as hooks.
+ */
+function registerDashboardRoutes(app: FastifyInstance, options: HttpServerOptions): void {
+  const conversations = new ConversationCache(DASHBOARD_MAX_ENTRIES);
+  const managed = createManagedSessions(app, options);
+  const auth = { preHandler: bearerAuth(options.token) };
+  const sessionOf = (agent: AgentState): string => path.basename(agent.jsonlFile, '.jsonl');
+
+  app.get('/api/dashboard/agents', auth, async () => {
+    let live = new Set<string>();
+    let liveKnown = true;
+    if (managed) {
+      try {
+        live = await managed.liveTerminalSessions();
+      } catch (err) {
+        liveKnown = false;
+        app.log.warn({ err }, 'dashboard: could not list live sessions');
+      }
+    }
+    const agents = [];
+    for (const agent of options.store.values()) {
+      let title: string | null = null;
+      try {
+        title = conversations.get(agent.jsonlFile).title;
+      } catch (err) {
+        app.log.warn(
+          { err, id: agent.id, file: agent.jsonlFile },
+          'dashboard: transcript unreadable',
+        );
+      }
+      const sessionId = sessionOf(agent);
+      agents.push({
+        id: agent.id,
+        sessionId,
+        title,
+        owner: managed && liveKnown ? managed.owner(sessionId, live) : 'terminal',
+        busy: managed?.isBusy(sessionId) ?? false,
+        pending: managed?.pendingFor(sessionId) ?? [],
+      });
+    }
+    return { canReply: !!managed, agents };
+  });
+
+  app.get<{ Params: { id: string } }>(
+    '/api/dashboard/agents/:id/conversation',
+    { ...auth, schema: { params: AGENT_ID_PARAMS } },
+    async (request, reply) => {
+      const agent = options.store.get(Number(request.params.id));
+      if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
+      return { id: agent.id, ...conversations.get(agent.jsonlFile) };
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { text: string } }>(
+    '/api/dashboard/agents/:id/messages',
+    { ...auth, schema: { params: AGENT_ID_PARAMS, body: TEXT_BODY } },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      const agent = options.store.get(Number(request.params.id));
+      if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
+      return sendOrFail(reply, () => managed.send(sessionOf(agent), request.body.text));
+    },
+  );
+
+  app.post<{ Body: { text: string } }>(
+    '/api/dashboard/sessions',
+    { ...auth, schema: { body: TEXT_BODY } },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      return sendOrFail(reply, async () => ({ sessionId: await managed.start(request.body.text) }));
+    },
+  );
+
+  app.post<{ Params: { requestId: string }; Body: { allow: boolean } }>(
+    '/api/dashboard/permissions/:requestId',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          properties: { allow: { type: 'boolean' } },
+          required: ['allow'],
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      return sendOrFail(reply, () => {
+        managed.answer(request.params.requestId, request.body.allow);
+        return Promise.resolve();
+      });
+    },
+  );
+}
+
+/**
+ * Seat arrangement and room signs. Reading is open (the filming view has no token and the
+ * data is only seat numbers and room names); changing it needs the server token.
+ */
+function registerSceneRoutes(app: FastifyInstance, options: HttpServerOptions): void {
+  const scene = options.sceneStateFile
+    ? new SceneState(options.sceneStateFile)
+    : options.embedded
+      ? null
+      : new SceneState();
+  const auth = { preHandler: bearerAuth(options.token) };
+  const sessionOf = (agent: AgentState): string => path.basename(agent.jsonlFile, '.jsonl');
+
+  app.get('/api/scene/state', async () => {
+    const seats: Record<number, number> = {};
+    if (scene) {
+      for (const agent of options.store.values()) {
+        const seat = scene.seatOf(sessionOf(agent));
+        if (seat !== undefined) seats[agent.id] = seat;
+      }
+    }
+    return { seats, rooms: scene?.rooms() ?? {} };
+  });
+
+  app.post<{ Body: { moves: Array<{ agentId: number; seat: number }> } }>(
+    '/api/dashboard/seats',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['moves'],
+          properties: {
+            moves: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 2,
+              items: {
+                type: 'object',
+                required: ['agentId', 'seat'],
+                properties: {
+                  agentId: { type: 'integer' },
+                  seat: { type: 'integer', minimum: 0, maximum: 999 },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!scene) return reply.code(503).send({ error: 'scene state unavailable' });
+      const moves = [];
+      for (const { agentId, seat } of request.body.moves) {
+        const agent = options.store.get(agentId);
+        if (!agent) return reply.code(404).send({ error: `no agent ${agentId}` });
+        moves.push({ sessionId: sessionOf(agent), seat });
+      }
+      scene.moveSeats(moves);
+      return { ok: true };
+    },
+  );
+
+  app.post<{ Params: { index: string }; Body: { title: string } }>(
+    '/api/dashboard/rooms/:index',
+    {
+      ...auth,
+      schema: {
+        params: {
+          type: 'object',
+          properties: { index: { type: 'string', pattern: '^[0-9]{1,3}$' } },
+          required: ['index'],
+        },
+        body: {
+          type: 'object',
+          required: ['title'],
+          properties: { title: { type: 'string', maxLength: MAX_ROOM_TITLE } },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!scene) return reply.code(503).send({ error: 'scene state unavailable' });
+      scene.setRoomTitle(Number(request.params.index), request.body.title);
+      return { ok: true };
+    },
+  );
+}
+
+const AGENT_ID_PARAMS = {
+  type: 'object',
+  properties: { id: { type: 'string', pattern: '^-?[0-9]+$' } },
+  required: ['id'],
+} as const;
+
+const TEXT_BODY = {
+  type: 'object',
+  properties: { text: { type: 'string', minLength: 1, maxLength: 20000 } },
+  required: ['text'],
+} as const;
+
+async function sendOrFail<T>(reply: FastifyReply, run: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return (await run()) ?? ({ ok: true } as T);
+  } catch (err) {
+    const status = err instanceof DashboardSessionError ? err.status : 500;
+    reply.code(status).send({ error: err instanceof Error ? err.message : String(err) });
+    return undefined;
+  }
+}
+
+/** Dashboard-owned sessions exist only for the standalone CLI (never inside VS Code). */
+function createManagedSessions(
+  app: FastifyInstance,
+  options: HttpServerOptions,
+): ManagedSessions | null {
+  if (options.embedded) return null;
+  let exe: string;
+  try {
+    exe = resolveClaudeExecutable();
+  } catch (err) {
+    app.log.warn({ err }, 'dashboard: replies disabled');
+    return null;
+  }
+  const managed = new ManagedSessions(process.cwd(), exe, (msg, extra) =>
+    app.log.info(extra ?? {}, `dashboard: ${msg}`),
+  );
+  app.addHook('onClose', async () => managed.dispose());
+  return managed;
 }
 
 // ── WebSocket ──────────────────────────────────────────────────

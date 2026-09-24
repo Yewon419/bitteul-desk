@@ -34,6 +34,16 @@ The architecture is fully agent-agnostic and editor-agnostic: a typed `HookProvi
 
 ![Pixel Agents screenshot](webview-ui/public/office.png)
 
+## Bitteul Desk (this fork)
+
+**Bitteul Desk** is a fork of [Pixel Agents](https://github.com/pixel-agents-hq/pixel-agents) (MIT, © 2026 Pablo De Lucca) that turns the office into a small agent dashboard.
+
+- `scene.html`: an illustrated pixel office. Every live Claude Code session is a Clawd-style staff member at a desk; offices stack into floors as sessions grow, staff can be long-pressed and dragged to swap seats, and each room has an editable name sign. Finished staff get up and wander, stretch, nap or grab a coffee.
+- `chat.html`: one plain, terminal-style chat window per session: read the conversation, reply, and answer tool-permission prompts. Sessions still open in a terminal are read-only; replies go through the [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) for sessions the dashboard owns.
+- Open the scene without a token for a clean, read-only filming view.
+
+All bundled character, furniture, floor and wall art in this fork was redrawn (see `art/`); the scene's office background was generated for this project and its Clawd-style staff are hand-dotted (`art/clawd.py`). Pixel font: [Galmuri](https://github.com/quiple/galmuri) (SIL OFL 1.1). The upstream README follows.
+
 ## Features
 
 - **One agent, one character** — every Claude Code terminal gets its own animated character
@@ -45,7 +55,7 @@ The architecture is fully agent-agnostic and editor-agnostic: a typed `HookProvi
 - **Persistent layouts** — your office design is saved and shared across VS Code windows
 - **Shared layout and assets** — import/export layouts and load external character, pet, and furniture packs
 - **Areas** — paint named areas onto the office, map workspace folders to them, and new agents sit inside the areas mapped to their folder
-- **Diverse characters** — 6 diverse characters. These are based on the amazing work of [JIK-A-4, Metro City](https://jik-a-4.itch.io/metrocity-free-topdown-character-pack).
+- **Diverse characters** — 6 diverse characters. Upstream's characters are based on the amazing work of [JIK-A-4, Metro City](https://jik-a-4.itch.io/metrocity-free-topdown-character-pack); this fork ships its own redrawn art instead.
 
 <p align="center">
   <img src="webview-ui/public/characters.png" alt="Pixel Agents characters" width="320" height="72" style="image-rendering: pixelated;">
