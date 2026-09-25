@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AgentStateStore } from '../src/agentStateStore.js';
 import { parseConversation } from '../src/conversationView.js';
 import { createHttpServer, type HttpServerHandle } from '../src/httpServer.js';
+import { parseQuestions } from '../src/managedSessions.js';
 import type { AgentState } from '../src/types.js';
 
 const TOKEN = crypto.randomUUID();
@@ -58,6 +59,27 @@ describe('parseConversation', () => {
     expect(view.title).toBe('내 제목');
     expect(view.entries.map((e) => e.kind)).toEqual(['assistant', 'tool']);
   });
+
+  it('shows a message typed mid-turn once, from its queued_command record', () => {
+    const view = parseConversation(
+      jsonl([
+        { type: 'queue-operation', operation: 'enqueue', content: '이것도 고쳐줘' },
+        {
+          type: 'attachment',
+          timestamp: 't9',
+          attachment: { type: 'queued_command', prompt: '이것도 고쳐줘', timestamp: 't8' },
+        },
+        { type: 'queue-operation', operation: 'remove', reason: 'absorbed_mid_turn' },
+        {
+          type: 'attachment',
+          attachment: { type: 'queued_command', prompt: '<system-reminder>x' },
+        },
+        { type: 'attachment', attachment: { type: 'todo_reminder', prompt: '숨김' } },
+      ]),
+      100,
+    );
+    expect(view.entries).toEqual([{ kind: 'user', text: '이것도 고쳐줘', timestamp: 't8' }]);
+  });
 });
 
 describe('dashboard routes', () => {
@@ -76,6 +98,7 @@ describe('dashboard routes', () => {
       store,
       sceneStateFile: path.join(dir, 'scene.json'),
       deskProfileFile: path.join(dir, 'profile.json'),
+      uploadsDir: path.join(dir, 'uploads'),
     });
   });
 
@@ -104,6 +127,10 @@ describe('dashboard routes', () => {
         owner: 'terminal',
         busy: false,
         pending: [],
+        settings: null,
+        activity: null,
+        suggestion: null,
+        activeTools: [],
       },
     ]);
     const convo = (await (
@@ -197,6 +224,38 @@ describe('dashboard routes', () => {
     expect(fs.readFileSync(file, 'utf-8')).not.toContain('nickname');
   });
 
+  it('guards interrupt and question answers with the token, and refuses them inside VS Code', async () => {
+    const post = (p: string, body: object, headers: Record<string, string> = auth) =>
+      fetch(url(p), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      });
+    expect((await post('/api/dashboard/agents/7/interrupt', {}, {})).status).toBe(401);
+    expect((await post('/api/dashboard/agents/7/interrupt', {})).status).toBe(503);
+    expect((await post('/api/dashboard/questions/abc', { answers: { q: 'a' } }, {})).status).toBe(
+      401,
+    );
+    expect((await post('/api/dashboard/questions/abc', { answers: { q: 'a' } })).status).toBe(503);
+    expect((await post('/api/dashboard/sessions', { text: 'hi', seat: 3 })).status).toBe(503);
+  });
+
+  it('saves an uploaded file under the uploads folder, never outside it', async () => {
+    const upload = (name: string, headers: Record<string, string> = auth) =>
+      fetch(url(`/api/dashboard/uploads?${new URLSearchParams({ name, mime: 'text/plain' })}`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', ...headers },
+        body: Buffer.from('hello 빛뜰'),
+      });
+    expect((await upload('a.txt', {})).status).toBe(401);
+    const res = await upload('../../evil name.txt');
+    expect(res.status).toBe(200);
+    const saved = (await res.json()) as { path: string; name: string; size: number };
+    expect(saved.path.startsWith(path.join(dir, 'uploads'))).toBe(true);
+    expect(saved.name).toBe('evil name.txt');
+    expect(fs.readFileSync(saved.path, 'utf-8')).toBe('hello 빛뜰');
+  });
+
   it('guards the dismiss route with the token and needs the runtime', async () => {
     const dismiss = (headers: Record<string, string>) =>
       fetch(url('/api/dashboard/agents/7/dismiss'), {
@@ -246,5 +305,38 @@ describe('dashboard routes', () => {
     expect(broken.status).toBe(500);
     expect(String(broken.body.error)).toContain('countdownDate');
     expect(String(broken.body.error)).toContain(file);
+  });
+});
+
+describe('parseQuestions', () => {
+  it('reads AskUserQuestion input and rejects shapes the chat cannot render', () => {
+    expect(
+      parseQuestions({
+        questions: [
+          {
+            question: '좋아하는 색은?',
+            header: '색',
+            multiSelect: false,
+            options: [
+              { label: '빨강', description: '따뜻한 색' },
+              { label: '파랑', description: '' },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        question: '좋아하는 색은?',
+        header: '색',
+        multiSelect: false,
+        options: [
+          { label: '빨강', description: '따뜻한 색' },
+          { label: '파랑', description: '' },
+        ],
+      },
+    ]);
+    expect(parseQuestions({})).toBeNull();
+    expect(parseQuestions({ questions: [{ question: 'x', options: [] }] })).toBeNull();
+    expect(parseQuestions({ questions: [{ question: 'x', options: [{ nope: 1 }] }] })).toBeNull();
   });
 });

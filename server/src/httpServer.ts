@@ -4,6 +4,8 @@ import fastifyWebsocket from '@fastify/websocket';
 import * as crypto from 'crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 import type { AgentRuntime } from './agentRuntime.js';
@@ -29,6 +31,8 @@ import {
   updateDeskBoard,
 } from './deskProfile.js';
 import {
+  DASHBOARD_MODES,
+  type DashboardMode,
   DashboardSessionError,
   ManagedSessions,
   resolveClaudeExecutable,
@@ -36,6 +40,14 @@ import {
 import { type PhoneLink, qrSvg } from './phoneAccess.js';
 import { MAX_ROOM_TITLE, SceneState } from './sceneState.js';
 import type { AgentState } from './types.js';
+import {
+  type Attachment,
+  isInsideUploads,
+  MAX_UPLOAD_BYTES,
+  messageContent,
+  saveUpload,
+  uploadsRoot,
+} from './uploads.js';
 
 /** Options for creating the HTTP + WebSocket server. */
 export interface HttpServerOptions {
@@ -65,6 +77,8 @@ export interface HttpServerOptions {
   sceneStateFile?: string;
   /** Where the user's desk profile (name, wall board) is read from. Defaults to ~/.pixel-agents. */
   deskProfileFile?: string;
+  /** Where chat attachments are saved. Defaults to ~/.pixel-agents/uploads. */
+  uploadsDir?: string;
   /** Phone links from `--phone`; empty when the server was started without it. */
   phoneLinks?: PhoneLink[];
 }
@@ -109,8 +123,13 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
   registerHealthRoute(app);
   registerHookRoute(app, options);
   registerWebSocketRoute(app, options);
-  registerDashboardRoutes(app, options);
-  registerSceneRoutes(app, options);
+  const scene = options.sceneStateFile
+    ? new SceneState(options.sceneStateFile)
+    : options.embedded
+      ? null
+      : new SceneState();
+  registerDashboardRoutes(app, options, scene);
+  registerSceneRoutes(app, options, scene);
 
   // ── Listen ──────────────────────────────────────────────────
 
@@ -172,11 +191,71 @@ const DASHBOARD_MAX_ENTRIES = 300;
  * Read-only conversation access for the scene dashboard. Transcripts hold the user's
  * full conversations, so both routes demand the server token (Bearer), same as hooks.
  */
-function registerDashboardRoutes(app: FastifyInstance, options: HttpServerOptions): void {
+function registerDashboardRoutes(
+  app: FastifyInstance,
+  options: HttpServerOptions,
+  scene: SceneState | null,
+): void {
   const conversations = new ConversationCache(DASHBOARD_MAX_ENTRIES);
   const managed = createManagedSessions(app, options);
   const auth = { preHandler: bearerAuth(options.token) };
   const sessionOf = (agent: AgentState): string => path.basename(agent.jsonlFile, '.jsonl');
+  const uploads = options.uploadsDir ?? uploadsRoot(os.homedir());
+
+  /** Text plus attachments as one user turn; only files this server saved may be attached. */
+  const turnContent = (
+    text: string,
+    attachments: Attachment[] | undefined,
+  ): ReturnType<typeof messageContent> | { error: string } => {
+    const files = attachments ?? [];
+    if (!text.trim() && files.length === 0) return { error: 'empty message' };
+    for (const f of files) {
+      if (!isInsideUploads(uploads, f.path) || !fs.existsSync(f.path)) {
+        return { error: `not an uploaded file: ${f.path}` };
+      }
+    }
+    return messageContent(text, files);
+  };
+
+  // Raw file bytes; the name and type ride in the query so a .json file is not parsed as JSON.
+  app.register((scope, _opts, done) => {
+    scope.addContentTypeParser(
+      '*',
+      { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BYTES },
+      (_request, body, next) => next(null, body),
+    );
+    scope.post<{ Querystring: { name: string; mime?: string } }>(
+      '/api/dashboard/uploads',
+      {
+        ...auth,
+        bodyLimit: MAX_UPLOAD_BYTES,
+        schema: {
+          querystring: {
+            type: 'object',
+            required: ['name'],
+            properties: {
+              name: { type: 'string', minLength: 1, maxLength: 300 },
+              mime: { type: 'string', maxLength: 100 },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        if (!Buffer.isBuffer(request.body)) {
+          return reply.code(400).send({ error: 'send the file as application/octet-stream' });
+        }
+        const saved = saveUpload(
+          uploads,
+          request.query.name,
+          request.query.mime || 'application/octet-stream',
+          request.body,
+        );
+        app.log.info({ file: saved.path, size: saved.size }, 'dashboard: file uploaded');
+        return saved;
+      },
+    );
+    done();
+  });
 
   app.get('/api/dashboard/agents', auth, async () => {
     let live = new Set<string>();
@@ -208,6 +287,11 @@ function registerDashboardRoutes(app: FastifyInstance, options: HttpServerOption
         owner: managed && liveKnown ? managed.owner(sessionId, live) : 'terminal',
         busy: managed?.isBusy(sessionId) ?? false,
         pending: managed?.pendingFor(sessionId) ?? [],
+        settings: managed?.settingsFor(sessionId) ?? null,
+        activity: managed?.activity(sessionId) ?? null,
+        suggestion: managed?.suggestionFor(sessionId) ?? null,
+        // Terminal sessions only show up through their transcript: what tools are running now.
+        activeTools: agent.activeToolStatuses ? [...agent.activeToolStatuses.values()] : [],
       });
     }
     return { canReply: !!managed, agents };
@@ -223,23 +307,50 @@ function registerDashboardRoutes(app: FastifyInstance, options: HttpServerOption
     },
   );
 
-  app.post<{ Params: { id: string }; Body: { text: string } }>(
+  app.post<{ Params: { id: string }; Body: { text: string; attachments?: Attachment[] } }>(
     '/api/dashboard/agents/:id/messages',
     { ...auth, schema: { params: AGENT_ID_PARAMS, body: TEXT_BODY } },
     async (request, reply) => {
+      const content = turnContent(request.body.text, request.body.attachments);
+      if (typeof content === 'object' && 'error' in content) {
+        return reply.code(400).send(content);
+      }
       if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
       const agent = options.store.get(Number(request.params.id));
       if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
-      return sendOrFail(reply, () => managed.send(sessionOf(agent), request.body.text));
+      return sendOrFail(reply, () => managed.send(sessionOf(agent), content));
     },
   );
 
-  app.post<{ Body: { text: string } }>(
+  app.post<{
+    Body: {
+      text: string;
+      seat?: number;
+      mode?: DashboardMode;
+      model?: string | null;
+      attachments?: Attachment[];
+    };
+  }>(
     '/api/dashboard/sessions',
-    { ...auth, schema: { body: TEXT_BODY } },
+    { ...auth, schema: { body: SESSION_BODY } },
     async (request, reply) => {
+      const { text, mode, model, attachments } = request.body;
+      const content = turnContent(text, attachments);
+      if (typeof content === 'object' && 'error' in content) {
+        return reply.code(400).send(content);
+      }
       if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
-      return sendOrFail(reply, async () => ({ sessionId: await managed.start(request.body.text) }));
+      return sendOrFail(reply, async () => {
+        const sessionId = await managed.start(content, {
+          ...(mode ? { mode } : {}),
+          ...(model !== undefined ? { model } : {}),
+        });
+        // Hired from an empty desk: that desk becomes the new staff member's seat.
+        if (request.body.seat !== undefined) {
+          scene?.moveSeats([{ sessionId, seat: request.body.seat }]);
+        }
+        return { sessionId };
+      });
     },
   );
 
@@ -263,6 +374,79 @@ function registerDashboardRoutes(app: FastifyInstance, options: HttpServerOption
       });
     },
   );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/dashboard/agents/:id/interrupt',
+    { ...auth, schema: { params: AGENT_ID_PARAMS } },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      const agent = options.store.get(Number(request.params.id));
+      if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
+      return sendOrFail(reply, () => managed.interrupt(sessionOf(agent)));
+    },
+  );
+
+  app.post<{ Params: { requestId: string }; Body: { answers: Record<string, string> } }>(
+    '/api/dashboard/questions/:requestId',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['answers'],
+          properties: {
+            answers: { type: 'object', additionalProperties: { type: 'string' } },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      return sendOrFail(reply, () => {
+        managed.answerQuestion(request.params.requestId, request.body.answers);
+        return Promise.resolve();
+      });
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { mode?: DashboardMode; model?: string | null } }>(
+    '/api/dashboard/agents/:id/settings',
+    {
+      ...auth,
+      schema: {
+        params: AGENT_ID_PARAMS,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            mode: { type: 'string', enum: [...DASHBOARD_MODES] },
+            model: { type: ['string', 'null'], maxLength: 100 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      const agent = options.store.get(Number(request.params.id));
+      if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
+      return sendOrFail(reply, () => managed.updateSettings(sessionOf(agent), request.body));
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/dashboard/agents/:id/catalog',
+    { ...auth, schema: { params: AGENT_ID_PARAMS } },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      const agent = options.store.get(Number(request.params.id));
+      return sendOrFail(reply, () => managed.catalog(agent ? sessionOf(agent) : ''));
+    },
+  );
+
+  app.get('/api/dashboard/catalog', auth, async (_request, reply) => {
+    if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+    return sendOrFail(reply, () => managed.catalog(''));
+  });
 
   // "퇴근": take the agent out of the office. A dashboard session is ended too; a terminal
   // session keeps running in its terminal and only leaves the office. Busy or waiting-for-
@@ -292,12 +476,11 @@ function registerDashboardRoutes(app: FastifyInstance, options: HttpServerOption
  * Seat arrangement and room signs. Reading is open (the filming view has no token and the
  * data is only seat numbers and room names); changing it needs the server token.
  */
-function registerSceneRoutes(app: FastifyInstance, options: HttpServerOptions): void {
-  const scene = options.sceneStateFile
-    ? new SceneState(options.sceneStateFile)
-    : options.embedded
-      ? null
-      : new SceneState();
+function registerSceneRoutes(
+  app: FastifyInstance,
+  options: HttpServerOptions,
+  scene: SceneState | null,
+): void {
   const auth = { preHandler: bearerAuth(options.token) };
   const sessionOf = (agent: AgentState): string => path.basename(agent.jsonlFile, '.jsonl');
 
@@ -415,6 +598,33 @@ function registerSceneRoutes(app: FastifyInstance, options: HttpServerOptions): 
   );
 }
 
+const ATTACHMENTS_SCHEMA = {
+  type: 'array',
+  maxItems: 20,
+  items: {
+    type: 'object',
+    required: ['path', 'name', 'size', 'mime'],
+    properties: {
+      path: { type: 'string', maxLength: 1000 },
+      name: { type: 'string', maxLength: 300 },
+      size: { type: 'integer', minimum: 0 },
+      mime: { type: 'string', maxLength: 100 },
+    },
+  },
+} as const;
+
+const SESSION_BODY = {
+  type: 'object',
+  properties: {
+    text: { type: 'string', maxLength: 20000 },
+    attachments: ATTACHMENTS_SCHEMA,
+    seat: { type: 'integer', minimum: 0, maximum: 999 },
+    mode: { type: 'string', enum: ['auto', 'default', 'acceptEdits', 'plan'] },
+    model: { type: ['string', 'null'], maxLength: 100 },
+  },
+  required: ['text'],
+} as const;
+
 const AGENT_ID_PARAMS = {
   type: 'object',
   properties: { id: { type: 'string', pattern: '^-?[0-9]+$' } },
@@ -423,7 +633,10 @@ const AGENT_ID_PARAMS = {
 
 const TEXT_BODY = {
   type: 'object',
-  properties: { text: { type: 'string', minLength: 1, maxLength: 20000 } },
+  properties: {
+    text: { type: 'string', maxLength: 20000 },
+    attachments: ATTACHMENTS_SCHEMA,
+  },
   required: ['text'],
 } as const;
 

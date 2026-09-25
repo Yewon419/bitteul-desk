@@ -32,6 +32,7 @@ import {
   FONT_SIGN,
   FONT_SMALL,
   FONT_TITLE,
+  HIT_PAD,
   HOLO_EDGE,
   HOLO_FILL,
   HOLO_TEXT,
@@ -262,7 +263,8 @@ type Mood = 'working' | 'alert' | 'resting';
 
 function moodOf(a: Agent): Mood {
   if (a.permission || (metas.get(a.id)?.pending.length ?? 0) > 0) return 'alert';
-  if (a.tools.size > 0 || !a.turnDone) return 'working';
+  // A dashboard turn counts as working between tools too, where hooks report nothing.
+  if (a.tools.size > 0 || !a.turnDone || metas.get(a.id)?.busy) return 'working';
   return 'resting';
 }
 
@@ -695,14 +697,19 @@ function hidePairing(): void {
   if (modal) modal.hidden = true;
 }
 
-function openChat(token: string, sessionId: string | null): void {
+function openChat(token: string, sessionId: string | null, seat?: number): void {
   if (window.matchMedia(SAME_TAB_CHAT_MEDIA).matches) {
-    window.location.assign(chatUrl(token, sessionId));
+    window.location.assign(chatUrl(token, sessionId, seat));
     return;
   }
-  if (openChatWindow(token, sessionId)) return;
+  const result = openChatWindow(token, sessionId, seat);
+  if (result === 'focused') {
+    showToast('이 직원의 대화 창은 이미 열려 있어요. 그 창을 앞으로 가져왔어요.');
+    return;
+  }
+  if (result === 'opened') return;
   showToast('브라우저가 대화 창(팝업)을 막았어요.', {
-    href: chatUrl(token, sessionId),
+    href: chatUrl(token, sessionId, seat),
     label: '여기를 눌러 열기',
   });
 }
@@ -781,6 +788,8 @@ async function start(): Promise<void> {
 
   let hitBoxes: HitBox[] = [];
   let seatZones: HitBox[] = [];
+  /** Monitors of desks nobody sits at; the hire button appears over them. */
+  let emptyDesks: HitBox[] = [];
   let signZones: HitBox[] = [];
   let plan: SeatPlan = planSeats([], new Map(), perFloor);
   const storedSeats = new Map<number, number>();
@@ -971,6 +980,37 @@ async function start(): Promise<void> {
   const inside = (boxes: HitBox[], x: number, y: number): HitBox | undefined =>
     [...boxes].reverse().find((h) => x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1);
 
+  const deskHire = document.getElementById('desk-hire');
+  let deskHireSeat: number | null = null;
+  /** Hiring needs the token and a server that can start sessions (the toolbar button shows it). */
+  const canHire = (): boolean => !!token && !!hire && !hire.hidden;
+  const showDeskHire = (desk: HitBox): void => {
+    if (!deskHire || !canHire()) return;
+    const rect = canvas.getBoundingClientRect();
+    const sx = rect.width / sceneW;
+    const sy = rect.height / sceneH;
+    deskHire.style.left = `${window.scrollX + rect.left + ((desk.x0 + desk.x1) / 2) * sx}px`;
+    deskHire.style.top = `${window.scrollY + rect.top + ((desk.y0 + desk.y1) / 2) * sy}px`;
+    deskHireSeat = desk.id;
+    deskHire.hidden = false;
+  };
+  const hideDeskHire = (): void => {
+    if (deskHire) deskHire.hidden = true;
+    deskHireSeat = null;
+  };
+  deskHire?.addEventListener('click', () => {
+    if (!token || deskHireSeat === null) return;
+    const seat = deskHireSeat;
+    hideDeskHire();
+    openChat(token, null, seat);
+  });
+  canvas.addEventListener('pointerleave', (ev) => {
+    if (ev.relatedTarget !== deskHire) hideDeskHire();
+  });
+  deskHire?.addEventListener('pointerleave', (ev) => {
+    if (ev.relatedTarget !== canvas) hideDeskHire();
+  });
+
   let press: { id: number; x: number; y: number; timer: number } | null = null;
   let drag: { id: number; x: number; y: number } | null = null;
 
@@ -1055,11 +1095,23 @@ async function start(): Promise<void> {
     }
     if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > DRAG_SLOP_PX) {
       window.clearTimeout(press.timer);
+      // A mouse drags at once, as on any desktop. A finger moving early is a scroll, so touch
+      // keeps the long press.
+      if (ev.pointerType === 'mouse') {
+        drag = { id: press.id, x, y };
+        canvas.style.cursor = 'grabbing';
+      }
       press = null;
+      if (drag) return;
     }
     const pointable =
       inside(hitBoxes, x, y) || (token && inside(signZones, x, y)) || inside([wallZone], x, y);
     canvas.style.cursor = pointable ? 'pointer' : 'default';
+    if (ev.pointerType === 'mouse') {
+      const desk = inside(emptyDesks, x, y);
+      if (desk) showDeskHire(desk);
+      else hideDeskHire();
+    }
   });
   canvas.addEventListener('pointerup', (ev) => {
     const [x, y] = toScene(ev);
@@ -1081,6 +1133,12 @@ async function start(): Promise<void> {
     }
     if (inside([wallZone], x, y)) {
       openBoard();
+      return;
+    }
+    // Touch has no hover: a tap on an empty monitor brings up the hire button there.
+    const desk = ev.pointerType !== 'mouse' ? inside(emptyDesks, x, y) : undefined;
+    if (desk) {
+      showDeskHire(desk);
       return;
     }
     const sign = token ? inside(signZones, x, y) : undefined;
@@ -1120,6 +1178,7 @@ async function start(): Promise<void> {
     const bubbles: Array<[number, number, string, boolean]> = [];
     const hits: HitBox[] = [];
     const zones: HitBox[] = [];
+    const empties: HitBox[] = [];
     const signs: HitBox[] = [];
     const halfW = staff.back[0][0].width / 2;
     let offsetX = 0;
@@ -1127,10 +1186,10 @@ async function start(): Promise<void> {
     const noteHit = (id: number, cx: number, top: number, bottom: number): void => {
       hits.push({
         id,
-        x0: offsetX + cx - halfW,
-        y0: offsetY + top,
-        x1: offsetX + cx + halfW,
-        y1: offsetY + bottom,
+        x0: offsetX + cx - halfW - HIT_PAD,
+        y0: offsetY + top - HIT_PAD,
+        x1: offsetX + cx + halfW + HIT_PAD,
+        y1: offsetY + bottom + HIT_PAD,
       });
     };
 
@@ -1165,6 +1224,15 @@ async function start(): Promise<void> {
             y1: offsetY + seat.anchor_y + SEAT_ZONE_BELOW,
           };
           zones.push({ id: seatNo, ...box });
+          if (!a) {
+            empties.push({
+              id: seatNo,
+              x0: offsetX + Math.min(...xs),
+              y0: offsetY + Math.min(...ys),
+              x1: offsetX + Math.max(...xs),
+              y1: offsetY + Math.max(...ys),
+            });
+          }
           if (!a || carried) return;
           hits.push({ id: a.id, ...box, y1: offsetY + Math.max(...ys) });
           const home: [number, number] = [seat.anchor_x, layout.step_off_y];
@@ -1227,6 +1295,7 @@ async function start(): Promise<void> {
     }
     hitBoxes = hits;
     seatZones = zones;
+    emptyDesks = empties;
     signZones = signs;
     requestAnimationFrame(frame);
   }

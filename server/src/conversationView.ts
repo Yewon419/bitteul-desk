@@ -42,6 +42,8 @@ interface TranscriptRecord {
   aiTitle?: string;
   customTitle?: string;
   message?: { content?: string | ContentBlock[] };
+  /** A message typed while the agent was busy lands as a queued_command attachment. */
+  attachment?: { type?: string; prompt?: string | ContentBlock[]; timestamp?: string };
 }
 
 function clip(text: string, max: number): string {
@@ -94,6 +96,15 @@ export function parseConversation(jsonl: string, maxEntries: number): Conversati
     if (rec.type === 'user') {
       const text = userText(content);
       if (text) entries.push({ kind: 'user', text, timestamp: rec.timestamp });
+    } else if (rec.type === 'attachment' && rec.attachment?.type === 'queued_command') {
+      const text = userText(rec.attachment.prompt);
+      if (text) {
+        entries.push({
+          kind: 'user',
+          text,
+          timestamp: rec.attachment.timestamp ?? rec.timestamp,
+        });
+      }
     } else if (rec.type === 'assistant' && Array.isArray(content)) {
       for (const block of content) {
         if (block.type === 'text' && block.text?.trim()) {

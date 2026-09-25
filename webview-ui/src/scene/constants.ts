@@ -86,6 +86,8 @@ export const SELECT_MARK = '#ffd166';
 
 export const LONG_PRESS_MS = 350;
 export const DRAG_SLOP_PX = 8;
+/** Extra scene pixels around a staff sprite that still count as grabbing them. */
+export const HIT_PAD = 10;
 /** Consecutive failed agent polls before the office says the server is unreachable. */
 export const POLL_FAILURES_BEFORE_TOAST = 2;
 /** The enlarged wall board is drawn roomier than the wall itself so no line gets cut. */
