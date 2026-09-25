@@ -125,6 +125,7 @@ interface Agent {
   palette: number;
   tools: Map<string, Tool>;
   lastToolId: string | null;
+  /** Starts true: a session the server has not seen working yet is shown resting. */
   turnDone: boolean;
   permission: boolean;
 }
@@ -165,7 +166,7 @@ async function loadBoard(): Promise<Board> {
 function ensureAgent(id: number, palette = 0): Agent {
   let a = agents.get(id);
   if (!a) {
-    a = { id, palette, tools: new Map(), lastToolId: null, turnDone: false, permission: false };
+    a = { id, palette, tools: new Map(), lastToolId: null, turnDone: true, permission: false };
     agents.set(id, a);
   }
   return a;
@@ -639,6 +640,57 @@ function showToast(message: string, link?: { href: string; label: string }): voi
   toast.hidden = false;
 }
 
+interface PhoneLinkInfo {
+  links: Array<{
+    url: string;
+    kind: 'tailscale-https' | 'tailscale' | 'lan' | 'virtual';
+    where: string;
+  }>;
+  qr: string | null;
+}
+
+const PAIR_WHERE: Record<PhoneLinkInfo['links'][number]['kind'], string> = {
+  'tailscale-https': 'Tailscale 주소라 밖에서도 열려요.',
+  tailscale: 'Tailscale 주소라 밖에서도 열려요.',
+  lan: '같은 Wi-Fi에서만 열려요. 밖에서도 쓰려면 PC와 폰에 Tailscale을 설치하고 서버를 다시 켜세요.',
+  virtual: '가상 네트워크 주소라 폰에서 안 열릴 수 있어요.',
+};
+
+/** Show the QR a phone scans once; after that the phone opens the office from its home screen. */
+async function showPairing(token: string): Promise<void> {
+  const modal = document.getElementById('pair-modal');
+  const img = document.getElementById('pair-qr') as HTMLImageElement | null;
+  const text = document.getElementById('pair-text');
+  const where = document.getElementById('pair-where');
+  if (!modal || !img || !text || !where) return;
+  let info: PhoneLinkInfo;
+  try {
+    info = await fetchJson<PhoneLinkInfo>('./api/dashboard/phone-link', token);
+  } catch (err) {
+    showToast(`폰 연결 정보를 불러오지 못했어요: ${String(err)}`);
+    return;
+  }
+  const first = info.links[0];
+  if (first && info.qr) {
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(info.qr)}`;
+    img.hidden = false;
+    text.textContent =
+      '폰 카메라로 찍어서 열고, 브라우저 메뉴에서 "홈 화면에 추가"를 눌러 두세요. 그다음부턴 PC가 켜져 있으면 아이콘만 누르면 돼요.';
+    where.textContent = PAIR_WHERE[first.kind];
+  } else {
+    img.hidden = true;
+    text.textContent =
+      '지금은 폰 모드로 켜져 있지 않아요. 터미널에서 bitteul-desk --phone 으로 다시 켜면 여기에 QR이 떠요.';
+    where.textContent = '';
+  }
+  modal.hidden = false;
+}
+
+function hidePairing(): void {
+  const modal = document.getElementById('pair-modal');
+  if (modal) modal.hidden = true;
+}
+
 function openChat(token: string, sessionId: string | null): void {
   if (window.matchMedia(SAME_TAB_CHAT_MEDIA).matches) {
     window.location.assign(chatUrl(token, sessionId));
@@ -773,6 +825,18 @@ async function start(): Promise<void> {
     scopeEnabled = true;
     renderScope();
     document.getElementById('scope')?.addEventListener('click', toggleScope);
+    const pair = document.getElementById('pair');
+    if (pair) {
+      pair.hidden = window.matchMedia(SAME_TAB_CHAT_MEDIA).matches;
+      pair.addEventListener('click', () => void showPairing(token));
+    }
+    document.getElementById('pair-close')?.addEventListener('click', hidePairing);
+    document.getElementById('pair-modal')?.addEventListener('click', (ev) => {
+      if (ev.target === ev.currentTarget) hidePairing();
+    });
+    window.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') hidePairing();
+    });
   }
 
   const toScene = (ev: { clientX: number; clientY: number }): [number, number] => {
@@ -981,6 +1045,8 @@ async function start(): Promise<void> {
           bodies.set(a.id, b);
           stepBody(b, moodOf(a) === 'resting', home, layout.floor, t);
           if (!b.home) {
+            // Off duty: the desk still belongs to them, so a long press on it picks them up.
+            hits.push({ id: a.id, ...box });
             walkers.push([a, b]);
             return;
           }

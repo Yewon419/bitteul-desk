@@ -45,6 +45,7 @@ const input = byId<HTMLTextAreaElement>('input');
 const sendBtn = byId<HTMLButtonElement>('send');
 const errorEl = byId<HTMLParagraphElement>('error');
 const backEl = byId<HTMLAnchorElement>('back');
+const dismissBtn = byId<HTMLButtonElement>('dismiss');
 
 let meta: AgentMeta | undefined;
 let lastSignature = '';
@@ -52,6 +53,10 @@ let lastAsks = '';
 let sending = false;
 let userName = DEFAULT_USER_NAME;
 let profileError = '';
+let dismissed = false;
+let confirmTimer: number | undefined;
+/** How long the button waits for the second, confirming click. */
+const DISMISS_CONFIRM_MS = 4000;
 /** Folded tool runs the user opened, keyed by their first entry, so polling keeps them open. */
 const openRuns = new Set<string>();
 
@@ -168,6 +173,17 @@ function renderStatus(): void {
   } else {
     status = meta.owner === 'dashboard' ? '대기' : '대기 (보내면 이어받음)';
   }
+  if (dismissed) {
+    status = '퇴근';
+    note = '퇴근했어요. 이 세션이 다시 움직이면 사무실로 돌아와요.';
+    locked = true;
+  }
+  dismissBtn.hidden = !meta || creating || dismissed;
+  dismissBtn.disabled = !meta || meta.busy || meta.pending.length > 0;
+  dismissBtn.title =
+    meta?.owner === 'terminal'
+      ? '사무실에서만 빠져요. 터미널의 Claude는 그대로 켜져 있어요.'
+      : '이 세션을 끝내고 사무실에서 빼요.';
   statusEl.textContent = status;
   statusEl.dataset.state = status;
   noteEl.textContent = note;
@@ -210,6 +226,7 @@ async function answer(requestId: string, allow: boolean, card: HTMLElement): Pro
 }
 
 async function pollAgents(): Promise<void> {
+  if (dismissed) return;
   try {
     const data = await fetchJson<AgentsResponse>('./api/dashboard/agents', token);
     meta = sessionId ? data.agents.find((a) => a.sessionId === sessionId) : undefined;
@@ -271,6 +288,42 @@ async function send(): Promise<void> {
     input.focus();
   }
 }
+
+function resetDismissConfirm(): void {
+  window.clearTimeout(confirmTimer);
+  delete dismissBtn.dataset.confirm;
+  dismissBtn.textContent = '퇴근';
+}
+
+/** First click arms, second click within a few seconds sends the agent home. */
+async function dismiss(): Promise<void> {
+  if (!meta || dismissBtn.disabled) return;
+  if (dismissBtn.dataset.confirm !== '1') {
+    dismissBtn.dataset.confirm = '1';
+    dismissBtn.textContent = '정말 퇴근?';
+    confirmTimer = window.setTimeout(resetDismissConfirm, DISMISS_CONFIRM_MS);
+    return;
+  }
+  resetDismissConfirm();
+  dismissBtn.disabled = true;
+  try {
+    await postJson(`./api/dashboard/agents/${meta.id}/dismiss`, token, {});
+  } catch (err) {
+    errorEl.textContent = String(err).includes('409')
+      ? '작업 중이거나 승인을 기다리는 중이라 지금은 퇴근시킬 수 없어요.'
+      : `퇴근시키지 못했어요: ${String(err)}`;
+    renderStatus();
+    return;
+  }
+  dismissed = true;
+  renderStatus();
+  window.setTimeout(() => {
+    if (window.opener && !window.matchMedia(TOUCH_MEDIA).matches) window.close();
+    else window.location.assign(backEl.href);
+  }, 1200);
+}
+
+dismissBtn.addEventListener('click', () => void dismiss());
 
 input.addEventListener('keydown', (ev) => {
   if (window.matchMedia(TOUCH_MEDIA).matches) return;

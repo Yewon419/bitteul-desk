@@ -18,6 +18,7 @@ import {
   SERVERS_DIR,
 } from './constants.js';
 import { createHttpServer } from './httpServer.js';
+import type { PhoneLink } from './phoneAccess.js';
 import type { ServerConfig } from './serverConfig.js';
 import { isServerConfig, isServerTarget } from './serverConfig.js';
 
@@ -71,6 +72,8 @@ export class PixelAgentsServer {
     onReloadAssets?: ReloadAssetsSideEffect;
     /** A caller-owned token (e.g. the persistent phone token); minted fresh when omitted. */
     token?: string;
+    /** Links a phone can open, shown behind the office's pairing button. */
+    phoneLinks?: PhoneLink[];
   }): Promise<ServerConfig> {
     const embedded = options?.embedded ?? true;
     const wantsSpa = !embedded;
@@ -108,6 +111,7 @@ export class PixelAgentsServer {
       onHookEvent: (providerId, event) => this.callback?.(providerId, event),
       onSetHooksEnabled: options?.onSetHooksEnabled,
       onReloadAssets: options?.onReloadAssets,
+      phoneLinks: options?.phoneLinks,
     });
 
     this.app = app;

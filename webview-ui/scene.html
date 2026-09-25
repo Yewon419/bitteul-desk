@@ -8,6 +8,8 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="빛뜰 데스크" />
+    <link rel="apple-touch-icon" href="./scene/app-icon.png" />
+    <link rel="icon" type="image/png" href="./scene/app-icon.png" />
     <title>빛뜰 데스크</title>
     <style>
       @font-face {
@@ -30,6 +32,15 @@
       .tool-btn[hidden] { display: none; }
       #scope { background: #ffffff; }
       #scope[data-on='true'] { background: #bfe0f5; }
+      #pair { background: #bfe0f5; }
+      #pair-modal { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(8, 14, 24, 0.72); }
+      #pair-modal[hidden] { display: none; }
+      .pair-card { width: min(380px, 100%); box-sizing: border-box; padding: 20px; text-align: center; font-family: 'Galmuri11', sans-serif; color: #13293d; background: #ffffff; border: 3px solid #13293d; box-shadow: 4px 4px 0 #13293d; }
+      .pair-card h2 { margin: 0 0 12px; font-size: 18px; }
+      #pair-qr { display: block; width: 240px; height: 240px; margin: 0 auto 12px; image-rendering: pixelated; }
+      #pair-qr[hidden] { display: none; }
+      .pair-card p { margin: 0 0 10px; font-size: 13px; line-height: 1.6; }
+      #pair-where { color: #2b5d85; }
       #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 12; max-width: min(640px, 92vw); padding: 12px 16px; font-family: 'Galmuri11', sans-serif; font-size: 14px; line-height: 1.6; color: #ffffff; background: #13293d; border: 3px solid #ffd166; }
       #toast[hidden] { display: none; }
       #toast a { color: #ffd166; font-weight: bold; }
@@ -43,10 +54,20 @@
   <body>
     <div id="toolbar">
       <button id="hire" class="tool-btn" type="button" hidden>+ 새 직원</button>
+      <button id="pair" class="tool-btn" type="button" hidden>폰 연결</button>
       <button id="scope" class="tool-btn" type="button" hidden title="다른 폴더에서 연 Claude Code 세션도 사무실에 불러올지 정해요">이 폴더만 보는 중</button>
     </div>
     <canvas id="scene"></canvas>
     <div id="toast" role="status" hidden></div>
+    <div id="pair-modal" role="dialog" aria-modal="true" aria-labelledby="pair-title" hidden>
+      <div class="pair-card">
+        <h2 id="pair-title">폰 연결</h2>
+        <img id="pair-qr" alt="폰에서 사무실을 여는 QR 코드" hidden />
+        <p id="pair-text"></p>
+        <p id="pair-where"></p>
+        <button id="pair-close" class="tool-btn" type="button">닫기</button>
+      </div>
+    </div>
     <script type="module" src="/src/scene/main.ts"></script>
   </body>
 </html>

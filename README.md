@@ -19,8 +19,9 @@
 - **대시보드에서 바로 답장.** 대화 창에서 메시지를 보내면 그 세션이 이어서 일해요. 도구 사용 승인 요청이 오면 허용이나 거부를 누르면 돼요.
 - **폰으로 밖에서도.** `--phone`으로 켜면 폰에서 사무실을 보고 지시와 승인까지 할 수 있어요. Tailscale을 붙이면 집 밖에서도 돼요.
 - **새 직원 부르기.** 왼쪽 위 **+ 새 직원** 버튼으로 새 세션을 시작해요.
-- **층 늘리기와 자리 바꾸기.** 방 3개에 6자리가 한 층이고, 세션이 늘면 아래로 층이 생겨요. 직원을 꾹 눌러 끌면 자리를 옮기고, 다른 직원 자리에 놓으면 둘이 자리를 바꿔요.
+- **층 늘리기와 자리 바꾸기.** 방 3개에 6자리가 한 층이고, 세션이 늘면 아래로 층이 생겨요. 직원을 꾹 눌러 끌면 자리를 옮기고, 다른 직원 자리에 놓으면 둘이 자리를 바꿔요. 쉬면서 돌아다니는 직원은 그 직원 책상을 꾹 눌러도 잡혀요.
 - **방 이름표.** 방 위 이름표를 누르면 이름을 쓸 수 있어요. 자리와 이름은 다시 켜도 그대로예요.
+- **퇴근.** 대화 창 오른쪽 위 **퇴근**을 두 번 누르면 그 직원이 사무실에서 빠져요. 대시보드에서 시작한 세션은 세션도 끝나고, 터미널 세션은 터미널의 Claude가 그대로 켜져 있어요. 작업 중이거나 승인을 기다리는 직원은 퇴근시킬 수 없어요.
 
 | 대화 창                               | 세션이 늘면 층이 생겨요                      |
 | ------------------------------------- | -------------------------------------------- |
@@ -37,7 +38,7 @@ Claude Code를 쓰는 프로젝트 폴더에서 아래 한 줄을 실행하세�
 
 ```bash
 cd 내-프로젝트-폴더
-npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.1/bitteul-desk-0.1.1.tgz
+npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.2/bitteul-desk-0.1.2.tgz
 ```
 
 켜지면 브라우저가 자동으로 사무실 화면을 열어요. 브라우저가 안 열리면 터미널에 찍힌 `Bitteul Desk office:` 주소를 직접 여세요. 끌 때는 터미널에서 **Ctrl+C**를 누르면 돼요.
@@ -45,7 +46,7 @@ npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.1/bitteul-de
 매번 긴 주소를 치기 싫으면 전역으로 설치해 두세요.
 
 ```bash
-npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.1/bitteul-desk-0.1.1.tgz
+npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.2/bitteul-desk-0.1.2.tgz
 bitteul-desk
 ```
 
@@ -64,6 +65,8 @@ bitteul-desk --port 3100      # 포트 고정 (기본은 빈 포트 자동 선�
 bitteul-desk --no-open        # 브라우저 자동 열기 끄기
 bitteul-desk --host 127.0.0.1 # 접속 주소 (기본값)
 bitteul-desk --phone          # 폰 접속 모드 (아래 '폰으로 밖에서 지시하기')
+bitteul-desk --install-autostart # (Windows) 로그인할 때 폰 모드로 자동 시작
+bitteul-desk --remove-autostart  # 자동 시작 끄기
 bitteul-desk --help
 ```
 
@@ -78,30 +81,38 @@ bitteul-desk --help
 | ---------------------------------------------------- | ---------------------------------------------------------- |
 | ![폰 사무실 화면](docs/screenshots/phone-office.png) | ![폰 대화 창과 승인 요청](docs/screenshots/phone-chat.png) |
 
-### 1. 같은 Wi-Fi에서 먼저 확인
+### 한 번만 설정하면 되는 순서
 
-```bash
-bitteul-desk --phone
-```
+1. **(밖에서도 쓰려면) Tailscale 설치.** PC와 폰에 [Tailscale](https://tailscale.com/download)을 설치하고 같은 계정으로 로그인하세요. 개인 사용은 무료고, 내 기기끼리만 암호화된 길로 연결돼요. 집 Wi-Fi에서만 쓸 거면 건너뛰어도 돼요.
+2. **폰 모드로 켜기.** 일 시킬 프로젝트 폴더에서 켜세요.
+   ```bash
+   bitteul-desk --phone
+   ```
+   Tailscale이 켜져 있으면 `https://내PC이름.xxx.ts.net:3100` 같은 고정 주소가 만들어져요. 서버는 내 PC 안에서만 열려 있고, Tailscale의 Serve 기능이 내 기기에만 https로 이어 줘요. Tailscale이 없으면 같은 Wi-Fi 주소로 대신 열려요.
+3. **폰 연결.** PC 사무실 화면 왼쪽 위의 **폰 연결**을 누르면 QR이 떠요. 폰 카메라로 찍어서 열고, 브라우저 메뉴에서 **홈 화면에 추가**를 눌러 두세요.
+4. **PC 켤 때 자동으로 켜기 (Windows).** 한 번 전역 설치한 뒤, 일 시킬 폴더에서 아래를 실행하세요.
+   ```bash
+   npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.2/bitteul-desk-0.1.2.tgz
+   bitteul-desk --install-autostart
+   ```
+   다음 로그인부터 폰 모드가 창 없이 켜져요. 기록은 `~/.pixel-agents/bitteul-desk.log`에 남아요. 끄려면 `bitteul-desk --remove-autostart`를 실행하세요.
 
-터미널에 폰용 주소와 QR 코드가 찍혀요. 폰 카메라로 QR을 찍으면 바로 열려요. 이 모드는 토큰을 `~/.pixel-agents/bitteul-desk-phone-token`에 저장해 두고 다시 켜도 같은 걸 써요. 그래서 폰에 즐겨찾기하거나 **홈 화면에 추가**해 두면 계속 쓸 수 있어요.
+이제 PC만 켜져 있으면 폰 홈 화면 아이콘을 누르는 것으로 끝이에요. 폰 모드의 토큰은 `~/.pixel-agents/bitteul-desk-phone-token`에 저장돼서, 다시 켜도 같은 링크가 계속 열려요.
 
-### 2. 밖에서도 되게: Tailscale
+**Tailscale 쪽에서 막힐 때**
 
-집 밖에서 접속하려면 PC와 폰을 잇는 통로가 필요해요. [Tailscale](https://tailscale.com/download)을 추천해요. 개인 사용은 무료고, 내 기기끼리만 암호화된 길로 연결돼요.
+- 폰 모드를 켰을 때 터미널에 "Tailscale Serve did not start"가 뜨면, 함께 나온 안내 링크를 열어 tailnet에서 HTTPS와 Serve를 켜 주세요. 그동안은 Wi-Fi 주소로 열려요.
+- Cloudflare WARP 같은 다른 VPN을 같이 쓰고 있는데 주소가 안 열리면, 그 VPN을 잠깐 끄고 확인해 보세요.
+- Tailscale 공유를 끄려면 `tailscale serve --https=3100 off`를 실행하세요.
 
-1. PC와 폰에 Tailscale을 설치하고 같은 계정으로 로그인하세요.
-2. `bitteul-desk --phone`을 다시 켜세요. Tailscale 주소(`100.`으로 시작)가 맨 위에 뜨고, QR도 그 주소로 바뀌어요.
-3. 폰에서 그 주소를 열어 두면 LTE로 밖에 있어도 들어와요.
-
-처음 켤 때 Windows 방화벽 창이 뜨면 허용해 주세요. Cloudflare WARP 같은 다른 VPN을 같이 쓰고 있는데 주소가 안 열리면, 그 VPN을 잠깐 끄고 확인해 보세요.
+Wi-Fi 주소로 쓸 때 처음 켜면 Windows 방화벽 창이 뜰 수 있어요. 허용해야 폰이 들어올 수 있어요.
 
 ### 밖에서 지시하기 전에 알아둘 것
 
 - **터미널에 열려 있는 세션은 폰에서도 보기 전용이에요.** 나가기 전에 터미널의 Claude를 닫아 두면 폰에서 이어받아 지시할 수 있어요. 대시보드에서 **+ 새 직원**으로 시작한 세션은 처음부터 폰에서 주고받을 수 있어요.
 - **새 직원은 `bitteul-desk`를 켠 폴더에서 일해요.** 일 시킬 프로젝트 폴더에서 켜 두세요.
 - **PC가 켜져 있어야 해요.** 절전 모드로 들어가면 접속이 끊겨요. 전원 설정에서 절전을 꺼 두세요.
-- **공유기 포트포워딩으로 인터넷에 직접 열지 마세요.** 이 서버는 암호화 없는 http라서 토큰이 그대로 오가요. 밖에서는 Tailscale처럼 내 기기끼리만 잇는 방법을 쓰세요.
+- **공유기 포트포워딩으로 인터넷에 직접 열지 마세요.** 서버 자체는 암호화 없는 http라서 토큰이 그대로 오가요. 밖에서는 Tailscale처럼 내 기기끼리만 잇는 방법을 쓰세요.
 - **폰 링크를 전부 끊고 싶으면** `~/.pixel-agents/bitteul-desk-phone-token` 파일을 지우고 다시 켜세요. 새 토큰이 만들어지고 예전 링크는 더 이상 안 열려요.
 
 ## 내 이름과 벽 게시판 바꾸기

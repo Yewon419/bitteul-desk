@@ -9,6 +9,7 @@
  */
 
 import { spawn } from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -20,6 +21,12 @@ import {
   loadAllFurniture,
   loadAllPets,
 } from './assetReload.js';
+import {
+  isEphemeralInstall,
+  startupScript,
+  startupScriptPath,
+  writeStartupScript,
+} from './autostart.js';
 import type { AssetCache, ReloadAssetsSideEffect } from './clientMessageHandler.js';
 import {
   getHooksConsent,
@@ -30,10 +37,15 @@ import {
 import { MAX_PORT, MIN_PORT } from './constants.js';
 import { FileStateAdapter } from './fileStateAdapter.js';
 import {
+  detectTailscale,
   loadOrCreatePhoneToken,
+  networkLinks,
   phoneAddresses,
+  type PhoneLink,
   phoneTokenPath,
   printPhoneLinks,
+  sceneLink,
+  startTailscaleServe,
 } from './phoneAccess.js';
 import { claudeProvider, copyHookScript, hookProviderById } from './providers/index.js';
 import { PixelAgentsServer } from './server.js';
@@ -47,9 +59,16 @@ export interface CliArgs {
   host: string;
   /** Open the office in the default browser once the server is up. */
   open: boolean;
-  /** Listen on the network with a persistent token and print phone links. */
+  /** Reach the office from a phone: Tailscale Serve when available, else the Wi-Fi network. */
   phone: boolean;
+  /** --host was passed explicitly, so phone mode must not choose the bind address. */
+  hostGiven: boolean;
+  /** Add or remove the Windows log-in autostart instead of starting the server. */
+  autostart: 'install' | 'remove' | null;
 }
+
+/** Phone mode wants a stable address, so it defaults to a fixed port. */
+export const PHONE_DEFAULT_PORT = 3100;
 
 /** Thrown by parseArgs on an invalid --port. Kept separate from process.exit so
  *  the parsing logic stays a pure, unit-testable function -- main() is the only
@@ -57,8 +76,13 @@ export interface CliArgs {
 export class CliArgsError extends Error {}
 
 export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { host: '127.0.0.1', open: true, phone: false };
-  let hostGiven = false;
+  const args: CliArgs = {
+    host: '127.0.0.1',
+    open: true,
+    phone: false,
+    hostGiven: false,
+    autostart: null,
+  };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port' || argv[i] === '-p') {
       const raw = argv[i + 1];
@@ -77,12 +101,16 @@ export function parseArgs(argv: string[]): CliArgs {
       i++;
     } else if (argv[i] === '--host' && argv[i + 1]) {
       args.host = argv[i + 1];
-      hostGiven = true;
+      args.hostGiven = true;
       i++;
     } else if (argv[i] === '--no-open') {
       args.open = false;
     } else if (argv[i] === '--phone') {
       args.phone = true;
+    } else if (argv[i] === '--install-autostart') {
+      args.autostart = 'install';
+    } else if (argv[i] === '--remove-autostart') {
+      args.autostart = 'remove';
     } else if (argv[i] === '--help') {
       console.log(`Usage: bitteul-desk [options]
 
@@ -90,14 +118,19 @@ Options:
   --port, -p <number>   Port to listen on (default: OS-assigned ephemeral port)
   --host <string>       Host to bind to (default: 127.0.0.1)
   --no-open             Do not open the office in the browser on start
-  --phone               Reach the office from a phone: listen on the network
-                        (unless --host is given), keep one token across
-                        restarts, and print phone links with a QR code
+  --phone               Reach the office from a phone. Uses Tailscale Serve for a
+                        fixed https address when Tailscale is running, else
+                        listens on the Wi-Fi network. Keeps one token across
+                        restarts and prints the phone link with a QR code.
+                        Port defaults to 3100.
+  --install-autostart   (Windows) Start in phone mode, hidden, every time you
+                        log in, working in the current folder
+  --remove-autostart    (Windows) Undo --install-autostart
   --help                Show this help message`);
       process.exit(0);
     }
   }
-  if (args.phone && !hostGiven) args.host = '0.0.0.0';
+  if (args.phone && args.port === undefined) args.port = PHONE_DEFAULT_PORT;
   return args;
 }
 
@@ -114,6 +147,94 @@ function openInBrowser(url: string): void {
     console.error(`[Bitteul Desk] Could not open a browser (${cmd}): ${err.message}`);
   });
   child.unref();
+}
+
+/** Add or remove the log-in autostart entry, then exit. */
+function runAutostartCommand(action: 'install' | 'remove', port: number | undefined): never {
+  if (process.platform !== 'win32') {
+    console.error(
+      '[Bitteul Desk] Autostart is Windows-only for now. On macOS or Linux, add `bitteul-desk --phone --no-open` to your login items.',
+    );
+    process.exit(1);
+  }
+  const appData = process.env.APPDATA;
+  if (!appData) {
+    console.error('[Bitteul Desk] APPDATA is not set, so the Startup folder cannot be found.');
+    process.exit(1);
+  }
+  const file = startupScriptPath(appData);
+  if (action === 'remove') {
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+    console.log(`[Bitteul Desk] Autostart removed (${file}). A running server keeps running.`);
+    process.exit(0);
+  }
+  const cli = __filename;
+  if (isEphemeralInstall(cli)) {
+    console.error(
+      '[Bitteul Desk] This copy runs from the npx cache, which can be cleaned at any time.\n' +
+        '  Install it first, then run the command again:\n' +
+        '    npm install --global <the release .tgz URL from the README>\n' +
+        '    bitteul-desk --install-autostart',
+    );
+    process.exit(1);
+  }
+  const log = path.join(os.homedir(), '.pixel-agents', 'bitteul-desk.log');
+  const args = ['--phone', '--no-open', '--port', String(port ?? PHONE_DEFAULT_PORT)];
+  writeStartupScript(file, startupScript(process.execPath, cli, process.cwd(), log, args));
+  console.log(`[Bitteul Desk] Autostart installed: ${file}`);
+  console.log(`  From your next log-in, phone mode starts hidden in ${process.cwd()}`);
+  console.log(`  Output goes to ${log}`);
+  console.log('  To start it right now, run: bitteul-desk --phone');
+  process.exit(0);
+}
+
+interface PhonePlan {
+  host: string;
+  token: string;
+  links: PhoneLink[];
+}
+
+/**
+ * Decide how a phone reaches this PC. Tailscale Serve keeps the server on 127.0.0.1 and
+ * adds a fixed https address inside the tailnet; without it, listen on the network.
+ */
+async function planPhone(args: CliArgs, port: number): Promise<PhonePlan> {
+  const token = loadOrCreatePhoneToken(phoneTokenPath(os.homedir()));
+  if (args.hostGiven) {
+    const links =
+      args.host === '0.0.0.0'
+        ? networkLinks(phoneAddresses(os.networkInterfaces()), port, token)
+        : [
+            {
+              url: sceneLink(`http://${args.host}:${port}`, token),
+              kind: 'lan' as const,
+              where: args.host,
+            },
+          ];
+    return { host: args.host, token, links };
+  }
+  const tailscale = await detectTailscale();
+  if (tailscale.ready) {
+    const serve = await startTailscaleServe(tailscale.exe, port);
+    if (serve.ok) {
+      const url = sceneLink(`https://${tailscale.dnsName}:${port}`, token);
+      return {
+        host: '127.0.0.1',
+        token,
+        links: [{ url, kind: 'tailscale-https', where: tailscale.dnsName }],
+      };
+    }
+    console.log(
+      `  Tailscale Serve did not start, so phone links use Wi-Fi for now:\n  ${serve.output}\n`,
+    );
+  } else {
+    console.log(`  ${tailscale.reason} Phone links use Wi-Fi for now.\n`);
+  }
+  return {
+    host: '0.0.0.0',
+    token,
+    links: networkLinks(phoneAddresses(os.networkInterfaces()), port, token),
+  };
 }
 
 // ── Hooks consent ─────────────────────────────────────────────
@@ -149,6 +270,7 @@ async function main(): Promise<void> {
     console.error(`[Pixel Agents] ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
+  if (args.autostart) runAutostartCommand(args.autostart, args.port);
 
   // dist/ contains both the CLI bundle and the assets/ + webview/ directories
   const distRoot = __dirname;
@@ -265,20 +387,20 @@ async function main(): Promise<void> {
       console.log('[Pixel Agents] Assets reloaded (external directory change)');
     };
 
-    const phoneToken = args.phone
-      ? loadOrCreatePhoneToken(phoneTokenPath(os.homedir()))
-      : undefined;
+    const phone = args.phone ? await planPhone(args, args.port ?? PHONE_DEFAULT_PORT) : null;
+    const host = phone?.host ?? args.host;
     const config = await server.start({
       store,
       runtime,
       embedded: false,
-      host: args.host,
+      host,
       port: args.port,
       staticDir,
       assetCache,
       onSetHooksEnabled,
       onReloadAssets,
-      token: phoneToken,
+      token: phone?.token,
+      phoneLinks: phone?.links ?? [],
     });
     currentConfig = { port: config.port, token: config.token };
 
@@ -342,8 +464,7 @@ async function main(): Promise<void> {
     // hook install (see standaloneTokenValid in httpServer.ts). Under `--host
     // 0.0.0.0` the office stays readable from the LAN at this machine's own
     // address; only the consent-bearing toggle needs the token.
-    const displayHost =
-      args.host === '0.0.0.0' || args.host === '::' || args.host === '' ? '127.0.0.1' : args.host;
+    const displayHost = host === '0.0.0.0' || host === '::' || host === '' ? '127.0.0.1' : host;
     const base = `http://${displayHost}:${config.port}`;
     const officeUrl = `${base}/scene.html?token=${config.token}`;
     console.log(`\n  Bitteul Desk office:  ${officeUrl}`);
@@ -351,13 +472,13 @@ async function main(): Promise<void> {
     console.log(
       '  (The token in these links lets a page reply to your agents. Keep it private.)\n',
     );
-    if (args.phone) {
+    if (phone) {
       if (config.pid !== process.pid) {
         console.log(
           `  Phone mode is OFF: a Bitteul Desk server is already running (PID ${config.pid}) and was reused.\n  Stop it, then start again with --phone.\n`,
         );
       } else {
-        await printPhoneLinks(phoneAddresses(os.networkInterfaces()), config.port, config.token);
+        await printPhoneLinks(phone.links);
       }
     }
     if (args.open) openInBrowser(officeUrl);

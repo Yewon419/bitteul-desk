@@ -27,6 +27,7 @@ import {
   ManagedSessions,
   resolveClaudeExecutable,
 } from './managedSessions.js';
+import { type PhoneLink, qrSvg } from './phoneAccess.js';
 import { MAX_ROOM_TITLE, SceneState } from './sceneState.js';
 import type { AgentState } from './types.js';
 
@@ -58,6 +59,8 @@ export interface HttpServerOptions {
   sceneStateFile?: string;
   /** Where the user's desk profile (name, wall board) is read from. Defaults to ~/.pixel-agents. */
   deskProfileFile?: string;
+  /** Phone links from `--phone`; empty when the server was started without it. */
+  phoneLinks?: PhoneLink[];
 }
 
 /** Result of createHttpServer(). */
@@ -254,6 +257,29 @@ function registerDashboardRoutes(app: FastifyInstance, options: HttpServerOption
       });
     },
   );
+
+  // "퇴근": take the agent out of the office. A dashboard session is ended too; a terminal
+  // session keeps running in its terminal and only leaves the office. Busy or waiting-for-
+  // approval sessions are refused so nobody is sent home mid-task.
+  app.post<{ Params: { id: string } }>(
+    '/api/dashboard/agents/:id/dismiss',
+    { ...auth, schema: { params: AGENT_ID_PARAMS } },
+    async (request, reply) => {
+      const runtime = options.runtime;
+      if (!runtime) return reply.code(503).send({ error: 'agent runtime unavailable' });
+      const agent = options.store.get(Number(request.params.id));
+      if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
+      const sessionId = sessionOf(agent);
+      if (managed?.isBusy(sessionId) || (managed?.pendingFor(sessionId).length ?? 0) > 0) {
+        return reply.code(409).send({ error: 'agent is working or waiting for approval' });
+      }
+      managed?.end(sessionId);
+      runtime.dismissalTracker.dismiss(agent.jsonlFile);
+      runtime.removeAgent(agent.id);
+      app.log.info({ id: agent.id, sessionId }, 'dashboard: agent dismissed');
+      return { ok: true };
+    },
+  );
 }
 
 /**
@@ -278,6 +304,12 @@ function registerSceneRoutes(app: FastifyInstance, options: HttpServerOptions): 
       }
     }
     return { seats, rooms: scene?.rooms() ?? {} };
+  });
+
+  app.get('/api/dashboard/phone-link', auth, async () => {
+    const links = options.phoneLinks ?? [];
+    const qr = links.length ? await qrSvg(links[0].url) : null;
+    return { links, qr };
   });
 
   app.get('/api/scene/profile', async (_request, reply) => {

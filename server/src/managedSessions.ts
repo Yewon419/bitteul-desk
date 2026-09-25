@@ -180,6 +180,14 @@ export class ManagedSessions {
     );
   }
 
+  /** End one dashboard session; its stream cleanup denies any approval still waiting. */
+  end(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    this.log('dashboard session ended by user', { sessionId });
+    session.close();
+  }
+
   dispose(): void {
     for (const s of this.sessions.values()) s.close();
     this.sessions.clear();

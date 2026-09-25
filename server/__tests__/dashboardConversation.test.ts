@@ -157,6 +157,23 @@ describe('dashboard routes', () => {
     expect(saved.seats).toEqual({ session: 4 });
   });
 
+  it('guards the dismiss route with the token and needs the runtime', async () => {
+    const dismiss = (headers: Record<string, string>) =>
+      fetch(url('/api/dashboard/agents/7/dismiss'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: '{}',
+      });
+    expect((await dismiss({})).status).toBe(401);
+    expect((await dismiss(auth)).status).toBe(503);
+  });
+
+  it('answers the pairing request only with the token, and with no links outside phone mode', async () => {
+    expect((await fetch(url('/api/dashboard/phone-link'))).status).toBe(401);
+    const res = await fetch(url('/api/dashboard/phone-link'), { headers: auth });
+    expect(await res.json()).toEqual({ links: [], qr: null });
+  });
+
   it('serves neutral profile defaults, then the user file, and names a broken file', async () => {
     const profile = async () => {
       const res = await fetch(url('/api/scene/profile'));

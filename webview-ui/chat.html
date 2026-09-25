@@ -6,6 +6,8 @@
     <meta name="theme-color" content="#172231" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="apple-touch-icon" href="./scene/app-icon.png" />
+    <link rel="icon" type="image/png" href="./scene/app-icon.png" />
     <title>빛뜰 데스크</title>
     <style>
       :root {
@@ -80,6 +82,9 @@
       .btn-primary { background: var(--accent); border-color: var(--accent); color: #ffffff; }
       .btn:disabled, #input:disabled { opacity: 0.45; cursor: not-allowed; }
       .hint { margin: 6px 0 0; font-size: 11px; color: var(--dim); }
+      #dismiss { flex: none; padding: 5px 10px; font-size: 12px; }
+      #dismiss[data-confirm='1'] { color: var(--warn); border-color: var(--warn); }
+      #dismiss[hidden] { display: none; }
       .back { display: none; flex: none; align-items: center; min-height: 36px; padding: 0 10px; font-size: 14px; color: var(--text); text-decoration: none; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
       @media (max-width: 900px), (pointer: coarse) {
         html, body { height: 100dvh; }
@@ -104,6 +109,7 @@
       <a id="back" class="back" href="./scene.html">← 사무실</a>
       <h1 id="title">불러오는 중…</h1>
       <span id="status"></span>
+      <button id="dismiss" class="btn" type="button" hidden>퇴근</button>
     </header>
     <div id="log" role="log" aria-live="polite"></div>
     <div id="asks"></div>
