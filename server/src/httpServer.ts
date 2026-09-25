@@ -21,7 +21,13 @@ import {
   WS_CLOSE_UNAUTHORIZED,
 } from './constants.js';
 import { ConversationCache } from './conversationView.js';
-import { DeskProfileError, readDeskProfile } from './deskProfile.js';
+import {
+  BOARD_FIELDS,
+  type BoardPatch,
+  DeskProfileError,
+  readDeskProfile,
+  updateDeskBoard,
+} from './deskProfile.js';
 import {
   DashboardSessionError,
   ManagedSessions,
@@ -311,6 +317,30 @@ function registerSceneRoutes(app: FastifyInstance, options: HttpServerOptions): 
     const qr = links.length ? await qrSvg(links[0].url) : null;
     return { links, qr };
   });
+
+  app.post<{ Body: BoardPatch }>(
+    '/api/dashboard/profile/board',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            BOARD_FIELDS.map((key) => [key, { type: ['string', 'number', 'null'] }]),
+          ),
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        return updateDeskBoard(request.body, options.deskProfileFile);
+      } catch (err) {
+        if (!(err instanceof DeskProfileError)) throw err;
+        return reply.code(400).send({ error: err.message });
+      }
+    },
+  );
 
   app.get('/api/scene/profile', async (_request, reply) => {
     try {

@@ -66,14 +66,9 @@ function salary(raw: Record<string, unknown>, file: string): DeskProfile['board'
   return { thisMonth, target };
 }
 
-/** Read and validate the profile; a missing file means defaults, a broken one throws. */
-export function readDeskProfile(file: string = deskProfilePath()): DeskProfile {
-  if (!fs.existsSync(file)) {
-    return {
-      userName: DEFAULT_USER_NAME,
-      board: { title: DEFAULT_BOARD_TITLE, countdown: null, salary: null },
-    };
-  }
+/** The profile file as written; a missing file is an empty profile, a broken one throws. */
+function readRawProfile(file: string): Record<string, unknown> {
+  if (!fs.existsSync(file)) return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
@@ -85,7 +80,10 @@ export function readDeskProfile(file: string = deskProfilePath()): DeskProfile {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new DeskProfileError(`${file}: expected a JSON object`);
   }
-  const raw = parsed as Record<string, unknown>;
+  return parsed as Record<string, unknown>;
+}
+
+function parseDeskProfile(raw: Record<string, unknown>, file: string): DeskProfile {
   return {
     userName: text(raw, 'userName', DEFAULT_USER_NAME, file),
     board: {
@@ -94,4 +92,40 @@ export function readDeskProfile(file: string = deskProfilePath()): DeskProfile {
       salary: salary(raw, file),
     },
   };
+}
+
+/** Read and validate the profile; a missing file means defaults, a broken one throws. */
+export function readDeskProfile(file: string = deskProfilePath()): DeskProfile {
+  return parseDeskProfile(readRawProfile(file), file);
+}
+
+export const BOARD_FIELDS = [
+  'boardTitle',
+  'countdownLabel',
+  'countdownDate',
+  'salaryThisMonth',
+  'salaryTarget',
+] as const;
+
+/** One wall-board edit: a value sets the field, null removes it, a missing key leaves it. */
+export type BoardPatch = Partial<Record<(typeof BOARD_FIELDS)[number], string | number | null>>;
+
+/**
+ * Apply a wall-board edit from the office. The merged file is validated with the same
+ * rules as a hand-edited one before anything is written, and written atomically.
+ */
+export function updateDeskBoard(patch: BoardPatch, file: string = deskProfilePath()): DeskProfile {
+  const raw = readRawProfile(file);
+  for (const key of BOARD_FIELDS) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    if (value === null || value === '') delete raw[key];
+    else raw[key] = value;
+  }
+  const profile = parseDeskProfile(raw, file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  fs.renameSync(tmp, file);
+  return profile;
 }

@@ -21,6 +21,7 @@
 - **새 직원 부르기.** 왼쪽 위 **+ 새 직원** 버튼으로 새 세션을 시작해요.
 - **층 늘리기와 자리 바꾸기.** 방 3개에 6자리가 한 층이고, 세션이 늘면 아래로 층이 생겨요. 직원을 꾹 눌러 끌면 자리를 옮기고, 다른 직원 자리에 놓으면 둘이 자리를 바꿔요. 쉬면서 돌아다니는 직원은 그 직원 책상을 꾹 눌러도 잡혀요.
 - **방 이름표.** 방 위 이름표를 누르면 이름을 쓸 수 있어요. 자리와 이름은 다시 켜도 그대로예요.
+- **벽 게시판.** 첫 번째 방 벽의 게시판을 누르면 크게 보여요. 제목, D-day, 월급 게이지를 그 자리에서 고칠 수 있어요.
 - **퇴근.** 대화 창 오른쪽 위 **퇴근**을 두 번 누르면 그 직원이 사무실에서 빠져요. 대시보드에서 시작한 세션은 세션도 끝나고, 터미널 세션은 터미널의 Claude가 그대로 켜져 있어요. 작업 중이거나 승인을 기다리는 직원은 퇴근시킬 수 없어요.
 
 | 대화 창                               | 세션이 늘면 층이 생겨요                      |
@@ -38,7 +39,7 @@ Claude Code를 쓰는 프로젝트 폴더에서 아래 한 줄을 실행하세�
 
 ```bash
 cd 내-프로젝트-폴더
-npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.3/bitteul-desk-0.1.3.tgz
+npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.4/bitteul-desk-0.1.4.tgz
 ```
 
 켜지면 브라우저가 자동으로 사무실 화면을 열어요. 브라우저가 안 열리면 터미널에 찍힌 `Bitteul Desk office:` 주소를 직접 여세요. 끌 때는 터미널에서 **Ctrl+C**를 누르면 돼요.
@@ -46,7 +47,7 @@ npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.3/bitteul-de
 매번 긴 주소를 치기 싫으면 전역으로 설치해 두세요.
 
 ```bash
-npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.3/bitteul-desk-0.1.3.tgz
+npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.4/bitteul-desk-0.1.4.tgz
 bitteul-desk
 ```
 
@@ -92,7 +93,7 @@ bitteul-desk --help
 3. **폰 연결.** PC 사무실 화면 왼쪽 위의 **폰 연결**을 누르면 QR이 떠요. 폰 카메라로 찍어서 열고, 브라우저 메뉴에서 **홈 화면에 추가**를 눌러 두세요.
 4. **PC 켤 때 자동으로 켜기 (Windows).** 한 번 전역 설치한 뒤, 일 시킬 폴더에서 아래를 실행하세요.
    ```bash
-   npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.3/bitteul-desk-0.1.3.tgz
+   npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.4/bitteul-desk-0.1.4.tgz
    bitteul-desk --install-autostart
    ```
    다음 로그인부터 폰 모드가 켜지고 사무실 화면이 브라우저에 열려요. 화면 없이 서버만 켜고 싶으면 `bitteul-desk --install-autostart --no-open`으로 등록하세요. 기록은 `~/.pixel-agents/bitteul-desk.log`에 남아요. 끄려면 `bitteul-desk --remove-autostart`를 실행하세요.

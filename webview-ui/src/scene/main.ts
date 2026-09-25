@@ -13,6 +13,8 @@ import {
   ALERT_BLINK_MS,
   BLINK_EVERY_MS,
   BLINK_MS,
+  BOARD_PREVIEW_H,
+  BOARD_PREVIEW_W,
   BUBBLE_ALERT_BG,
   BUBBLE_BG,
   BUBBLE_BORDER,
@@ -707,7 +709,7 @@ function openChat(token: string, sessionId: string | null): void {
 
 async function start(): Promise<void> {
   document.body.style.background = SCENE_PAGE_BG;
-  const [layout, board, bg, front] = await Promise.all([
+  const [layout, loadedBoard, bg, front] = await Promise.all([
     loadJson<SceneLayout>('./scene/scene.json'),
     loadBoard(),
     loadImage('./scene/background.png'),
@@ -746,6 +748,7 @@ async function start(): Promise<void> {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('[Scene] 2d context unavailable');
 
+  let board = loadedBoard;
   const roomW = layout.width;
   const roomH = layout.height;
   const perRoom = layout.seats.length;
@@ -855,6 +858,109 @@ async function start(): Promise<void> {
     });
   }
 
+  // ── Wall board: click to read it large, and (with the token) edit it ──
+  const wallQ = layout.wall;
+  /** The board hangs in the first room, which always sits at the scene origin. */
+  const wallZone: HitBox = {
+    id: 0,
+    x0: wallQ.x0,
+    y0: Math.min(wallQ.y0, wallQ.y2),
+    x1: wallQ.x1,
+    y1: Math.max(wallQ.y1, wallQ.y3),
+  };
+  const boardModal = document.getElementById('board-modal');
+  const boardForm = document.getElementById('board-form') as HTMLFormElement | null;
+  const boardPreview = document.getElementById('board-preview') as HTMLCanvasElement | null;
+  const boardError = document.getElementById('board-error');
+  const workingNow = (): number =>
+    [...agents.values()].filter((a) => moodOf(a) !== 'resting').length;
+  const field = (name: string): HTMLInputElement | null =>
+    boardForm?.elements.namedItem(name) as HTMLInputElement | null;
+
+  const draftBoard = (): Board => {
+    const title = field('boardTitle')?.value.trim() || DEFAULT_BOARD.title;
+    const date = field('countdownDate')?.value ?? '';
+    const label = field('countdownLabel')?.value.trim() || '마감까지';
+    const target = Number(field('salaryTarget')?.value || 0);
+    const thisMonth = Number(field('salaryThisMonth')?.value || 0);
+    return {
+      title,
+      countdown: date ? { label, date } : null,
+      salary: target > 0 ? { thisMonth, target } : null,
+    };
+  };
+
+  const renderBoardPreview = (shown: Board): void => {
+    if (!boardPreview) return;
+    const scale = Math.max(
+      2,
+      Math.floor(Math.min(window.innerHeight * 0.7, 640) / BOARD_PREVIEW_H),
+    );
+    boardPreview.width = BOARD_PREVIEW_W;
+    boardPreview.height = BOARD_PREVIEW_H;
+    boardPreview.style.width = `${BOARD_PREVIEW_W * scale}px`;
+    boardPreview.style.height = `${BOARD_PREVIEW_H * scale}px`;
+    boardPreview
+      .getContext('2d')
+      ?.drawImage(drawWallContent(shown, workingNow(), BOARD_PREVIEW_W, BOARD_PREVIEW_H), 0, 0);
+  };
+
+  const openBoard = (): void => {
+    if (!boardModal) return;
+    const set = (name: string, value: string): void => {
+      const input = field(name);
+      if (input) input.value = value;
+    };
+    set('boardTitle', board.title === DEFAULT_BOARD.title ? '' : board.title);
+    set('countdownLabel', board.countdown?.label ?? '');
+    set('countdownDate', board.countdown?.date ?? '');
+    set('salaryThisMonth', board.salary ? String(board.salary.thisMonth) : '');
+    set('salaryTarget', board.salary ? String(board.salary.target) : '');
+    if (boardError) boardError.textContent = '';
+    if (boardForm) boardForm.hidden = !token;
+    const readonly = document.getElementById('board-readonly');
+    if (readonly) readonly.hidden = !!token;
+    renderBoardPreview(board);
+    boardModal.hidden = false;
+  };
+  const closeBoard = (): void => {
+    if (boardModal) boardModal.hidden = true;
+  };
+
+  boardForm?.addEventListener('input', () => renderBoardPreview(draftBoard()));
+  boardForm?.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    if (!token) return;
+    const text = (name: string): string | null => field(name)?.value.trim() || null;
+    const amount = (name: string): number | null => {
+      const raw = field(name)?.value ?? '';
+      return raw === '' ? null : Number(raw);
+    };
+    const patch = {
+      boardTitle: text('boardTitle'),
+      countdownLabel: text('countdownLabel'),
+      countdownDate: text('countdownDate'),
+      salaryThisMonth: amount('salaryThisMonth'),
+      salaryTarget: amount('salaryTarget'),
+    };
+    postJson<{ board: Board }>('./api/dashboard/profile/board', token, patch)
+      .then((saved) => {
+        board = saved.board;
+        closeBoard();
+        showToast('벽 게시판을 고쳤어요.');
+      })
+      .catch((err: unknown) => {
+        if (boardError) boardError.textContent = `저장하지 못했어요: ${String(err)}`;
+      });
+  });
+  document.getElementById('board-close')?.addEventListener('click', closeBoard);
+  boardModal?.addEventListener('click', (ev) => {
+    if (ev.target === ev.currentTarget) closeBoard();
+  });
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') closeBoard();
+  });
+
   const toScene = (ev: { clientX: number; clientY: number }): [number, number] => {
     const rect = canvas.getBoundingClientRect();
     return [
@@ -951,7 +1057,8 @@ async function start(): Promise<void> {
       window.clearTimeout(press.timer);
       press = null;
     }
-    const pointable = inside(hitBoxes, x, y) || (token && inside(signZones, x, y));
+    const pointable =
+      inside(hitBoxes, x, y) || (token && inside(signZones, x, y)) || inside([wallZone], x, y);
     canvas.style.cursor = pointable ? 'pointer' : 'default';
   });
   canvas.addEventListener('pointerup', (ev) => {
@@ -970,6 +1077,10 @@ async function start(): Promise<void> {
       if (!token) return;
       if (sessionId) openChat(token, sessionId);
       else showToast('이 직원 정보를 아직 불러오지 못했어요. 2초쯤 뒤에 다시 눌러 주세요.');
+      return;
+    }
+    if (inside([wallZone], x, y)) {
+      openBoard();
       return;
     }
     const sign = token ? inside(signZones, x, y) : undefined;

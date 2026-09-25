@@ -88,6 +88,9 @@ export const LONG_PRESS_MS = 350;
 export const DRAG_SLOP_PX = 8;
 /** Consecutive failed agent polls before the office says the server is unreachable. */
 export const POLL_FAILURES_BEFORE_TOAST = 2;
+/** The enlarged wall board is drawn roomier than the wall itself so no line gets cut. */
+export const BOARD_PREVIEW_W = 124;
+export const BOARD_PREVIEW_H = 228;
 /** Below this viewport width the rooms stack in one column and fill the width. */
 export const COMPACT_MAX_WIDTH_PX = 900;
 /** Phones and tablets open a chat in the same tab instead of a popup window. */

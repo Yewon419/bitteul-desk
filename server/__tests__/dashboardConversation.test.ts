@@ -157,6 +157,46 @@ describe('dashboard routes', () => {
     expect(saved.seats).toEqual({ session: 4 });
   });
 
+  it('edits the wall board through the same validation as a hand-written file', async () => {
+    const file = path.join(dir, 'profile.json');
+    const save = (body: object, headers: Record<string, string> = auth) =>
+      fetch(url('/api/dashboard/profile/board'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      });
+    expect((await save({ boardTitle: '해킹' }, {})).status).toBe(401);
+
+    fs.writeFileSync(file, JSON.stringify({ userName: '대표님', salaryTarget: 100 }));
+    const saved = await save({
+      boardTitle: '빛뜰 컴퍼니',
+      countdownLabel: '출시까지',
+      countdownDate: '2026-12-31',
+      salaryTarget: null,
+    });
+    expect(saved.status).toBe(200);
+    expect(((await saved.json()) as { board: object }).board).toEqual({
+      title: '빛뜰 컴퍼니',
+      countdown: { label: '출시까지', date: '2026-12-31' },
+      salary: null,
+    });
+    const onDisk = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>;
+    expect(onDisk).toEqual({
+      userName: '대표님',
+      boardTitle: '빛뜰 컴퍼니',
+      countdownLabel: '출시까지',
+      countdownDate: '2026-12-31',
+    });
+
+    const before = fs.readFileSync(file, 'utf-8');
+    const bad = await save({ countdownDate: '내일' });
+    expect(bad.status).toBe(400);
+    expect(fs.readFileSync(file, 'utf-8')).toBe(before);
+    // Fields outside the board are stripped by the schema, never written.
+    expect((await save({ nickname: 'x' })).status).toBe(200);
+    expect(fs.readFileSync(file, 'utf-8')).not.toContain('nickname');
+  });
+
   it('guards the dismiss route with the token and needs the runtime', async () => {
     const dismiss = (headers: Record<string, string>) =>
       fetch(url('/api/dashboard/agents/7/dismiss'), {
