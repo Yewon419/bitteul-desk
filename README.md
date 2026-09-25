@@ -96,7 +96,7 @@ bitteul-desk --help
    npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.4/bitteul-desk-0.1.4.tgz
    bitteul-desk --install-autostart
    ```
-   다음 로그인부터 폰 모드가 켜지고 사무실 화면이 브라우저에 열려요. 화면 없이 서버만 켜고 싶으면 `bitteul-desk --install-autostart --no-open`으로 등록하세요. 기록은 `~/.pixel-agents/bitteul-desk.log`에 남아요. 끄려면 `bitteul-desk --remove-autostart`를 실행하세요.
+   다음 로그인부터 폰 모드가 켜지고 사무실 화면이 브라우저에 열려요. 화면 없이 서버만 켜고 싶으면 `bitteul-desk --install-autostart --no-open`으로 등록하세요. 등록은 레지스트리의 사용자 시작 프로그램(`HKCU\...\Run`)에 `BitteulDesk`라는 이름으로 들어가고, 작업 관리자의 시작 앱 탭에서도 보여요. 이전 버전이 시작 프로그램 폴더에 넣은 `bitteul-desk.vbs`는 다시 등록할 때 자동으로 지워져요. 기록은 `~/.pixel-agents/bitteul-desk.log`에 남아요. 끄려면 `bitteul-desk --remove-autostart`를 실행하세요.
 
 이제 PC만 켜져 있으면 폰 홈 화면 아이콘을 누르는 것으로 끝이에요. 폰 모드의 토큰은 `~/.pixel-agents/bitteul-desk-phone-token`에 저장돼서, 다시 켜도 같은 링크가 계속 열려요.
 

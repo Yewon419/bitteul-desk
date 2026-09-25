@@ -22,9 +22,13 @@ import {
   loadAllPets,
 } from './assetReload.js';
 import {
+  autostartScriptPath,
+  installRunKey,
   isEphemeralInstall,
+  legacyStartupScriptPath,
+  removeRunKey,
+  runKeyCommand,
   startupScript,
-  startupScriptPath,
   writeStartupScript,
 } from './autostart.js';
 import type { AssetCache, ReloadAssetsSideEffect } from './clientMessageHandler.js';
@@ -162,15 +166,14 @@ function runAutostartCommand(
     );
     process.exit(1);
   }
+  const file = autostartScriptPath(os.homedir());
   const appData = process.env.APPDATA;
-  if (!appData) {
-    console.error('[Bitteul Desk] APPDATA is not set, so the Startup folder cannot be found.');
-    process.exit(1);
-  }
-  const file = startupScriptPath(appData);
+  const legacy = appData ? legacyStartupScriptPath(appData) : null;
+  if (legacy && fs.existsSync(legacy)) fs.unlinkSync(legacy);
   if (action === 'remove') {
+    removeRunKey();
     if (fs.existsSync(file)) fs.unlinkSync(file);
-    console.log(`[Bitteul Desk] Autostart removed (${file}). A running server keeps running.`);
+    console.log('[Bitteul Desk] Autostart removed. A running server keeps running.');
     process.exit(0);
   }
   const cli = __filename;
@@ -187,7 +190,9 @@ function runAutostartCommand(
   const args = ['--phone', '--port', String(port ?? PHONE_DEFAULT_PORT)];
   if (!openOffice) args.push('--no-open');
   writeStartupScript(file, startupScript(process.execPath, cli, process.cwd(), log, args));
-  console.log(`[Bitteul Desk] Autostart installed: ${file}`);
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  installRunKey(runKeyCommand(path.join(systemRoot, 'System32', 'wscript.exe'), file));
+  console.log(`[Bitteul Desk] Autostart installed: ${file} (registered under HKCU Run)`);
   console.log(`  From your next log-in, phone mode starts in ${process.cwd()}`);
   console.log(
     openOffice ? '  and the office opens in your browser.' : '  without opening a browser.',

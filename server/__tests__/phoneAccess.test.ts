@@ -5,7 +5,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { isEphemeralInstall, startupScript, writeStartupScript } from '../src/autostart.js';
+import {
+  autostartScriptPath,
+  isEphemeralInstall,
+  runKeyCommand,
+  startupScript,
+  writeStartupScript,
+} from '../src/autostart.js';
 import { parseArgs, PHONE_DEFAULT_PORT } from '../src/cli.js';
 import {
   loadOrCreatePhoneToken,
@@ -145,6 +151,15 @@ describe('autostart script', () => {
         'C:\\Users\\a\\AppData\\Roaming\\npm\\node_modules\\bitteul-desk\\dist\\cli.js',
       ),
     ).toBe(false);
+  });
+
+  it('keeps the script in ~/.pixel-agents and quotes the Run command for spaces', () => {
+    expect(autostartScriptPath('C:\\Users\\a b')).toBe(
+      path.join('C:\\Users\\a b', '.pixel-agents', 'bitteul-desk-autostart.vbs'),
+    );
+    expect(runKeyCommand('C:\\Windows\\System32\\wscript.exe', 'C:\\Users\\a b\\start.vbs')).toBe(
+      '"C:\\Windows\\System32\\wscript.exe" "C:\\Users\\a b\\start.vbs"',
+    );
   });
 
   it.skipIf(process.platform !== 'win32')(
