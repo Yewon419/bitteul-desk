@@ -34,6 +34,7 @@ import {
   HOLO_FILL,
   HOLO_TEXT,
   LONG_PRESS_MS,
+  POLL_FAILURES_BEFORE_TOAST,
   READ_FRAME_MS,
   ROOM_TIME_SHIFT_MS,
   SAME_TAB_CHAT_MEDIA,
@@ -622,6 +623,7 @@ function drawCarried(
 function showToast(message: string, link?: { href: string; label: string }): void {
   const toast = document.getElementById('toast');
   if (!toast) return;
+  delete toast.dataset.kind;
   toast.replaceChildren(message);
   if (link) {
     const a = document.createElement('a');
@@ -801,6 +803,7 @@ async function start(): Promise<void> {
   window.setInterval(() => void pollScene(), TITLE_POLL_MS);
 
   if (token) {
+    let pollFailures = 0;
     const pollAgents = async (): Promise<void> => {
       try {
         const data = await fetchJson<{ canReply: boolean; agents: AgentMeta[] }>(
@@ -810,13 +813,26 @@ async function start(): Promise<void> {
         metas.clear();
         data.agents.forEach((m) => metas.set(m.id, m));
         if (hire) hire.hidden = !data.canReply;
+        pollFailures = 0;
+        // Connection is back: take down the "can't reach the server" notice on its own.
+        const toast = document.getElementById('toast');
+        if (toast?.dataset.kind === 'connection') {
+          toast.hidden = true;
+          delete toast.dataset.kind;
+        }
       } catch (err) {
         console.error('[Scene] dashboard poll failed', err);
+        pollFailures += 1;
+        const badToken = String(err).includes('401');
+        // A single miss is usually a server restart; only a streak is worth telling about.
+        if (!badToken && pollFailures < POLL_FAILURES_BEFORE_TOAST) return;
         showToast(
-          String(err).includes('401')
+          badToken
             ? '대시보드 주소의 토큰이 맞지 않아요. 서버를 다시 켜면 주소가 바뀝니다. 서버가 새로 알려 준 주소로 열어 주세요.'
-            : `서버에 연결하지 못했어요: ${String(err)}`,
+            : '서버에 연결하지 못했어요. 서버가 꺼졌거나 다시 켜지는 중이에요. 연결되면 이 안내는 저절로 사라져요.',
         );
+        const toast = document.getElementById('toast');
+        if (toast && !badToken) toast.dataset.kind = 'connection';
       }
     };
     void pollAgents();

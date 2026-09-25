@@ -2,7 +2,7 @@
   "name": "bitteul-desk",
   "displayName": "Pixel Agents",
   "description": "An illustrated pixel office where your Claude Code sessions sit at desks. Click one to read and reply in its own chat window.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "pablodelucca",
   "repository": {
     "type": "git",

@@ -38,7 +38,7 @@ Claude Code를 쓰는 프로젝트 폴더에서 아래 한 줄을 실행하세�
 
 ```bash
 cd 내-프로젝트-폴더
-npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.2/bitteul-desk-0.1.2.tgz
+npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.3/bitteul-desk-0.1.3.tgz
 ```
 
 켜지면 브라우저가 자동으로 사무실 화면을 열어요. 브라우저가 안 열리면 터미널에 찍힌 `Bitteul Desk office:` 주소를 직접 여세요. 끌 때는 터미널에서 **Ctrl+C**를 누르면 돼요.
@@ -46,7 +46,7 @@ npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.2/bitteul-de
 매번 긴 주소를 치기 싫으면 전역으로 설치해 두세요.
 
 ```bash
-npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.2/bitteul-desk-0.1.2.tgz
+npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.3/bitteul-desk-0.1.3.tgz
 bitteul-desk
 ```
 
@@ -65,7 +65,7 @@ bitteul-desk --port 3100      # 포트 고정 (기본은 빈 포트 자동 선�
 bitteul-desk --no-open        # 브라우저 자동 열기 끄기
 bitteul-desk --host 127.0.0.1 # 접속 주소 (기본값)
 bitteul-desk --phone          # 폰 접속 모드 (아래 '폰으로 밖에서 지시하기')
-bitteul-desk --install-autostart # (Windows) 로그인할 때 폰 모드로 자동 시작
+bitteul-desk --install-autostart # (Windows) 로그인할 때 폰 모드로 켜고 사무실 화면 열기
 bitteul-desk --remove-autostart  # 자동 시작 끄기
 bitteul-desk --help
 ```
@@ -92,10 +92,10 @@ bitteul-desk --help
 3. **폰 연결.** PC 사무실 화면 왼쪽 위의 **폰 연결**을 누르면 QR이 떠요. 폰 카메라로 찍어서 열고, 브라우저 메뉴에서 **홈 화면에 추가**를 눌러 두세요.
 4. **PC 켤 때 자동으로 켜기 (Windows).** 한 번 전역 설치한 뒤, 일 시킬 폴더에서 아래를 실행하세요.
    ```bash
-   npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.2/bitteul-desk-0.1.2.tgz
+   npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.3/bitteul-desk-0.1.3.tgz
    bitteul-desk --install-autostart
    ```
-   다음 로그인부터 폰 모드가 창 없이 켜져요. 기록은 `~/.pixel-agents/bitteul-desk.log`에 남아요. 끄려면 `bitteul-desk --remove-autostart`를 실행하세요.
+   다음 로그인부터 폰 모드가 켜지고 사무실 화면이 브라우저에 열려요. 화면 없이 서버만 켜고 싶으면 `bitteul-desk --install-autostart --no-open`으로 등록하세요. 기록은 `~/.pixel-agents/bitteul-desk.log`에 남아요. 끄려면 `bitteul-desk --remove-autostart`를 실행하세요.
 
 이제 PC만 켜져 있으면 폰 홈 화면 아이콘을 누르는 것으로 끝이에요. 폰 모드의 토큰은 `~/.pixel-agents/bitteul-desk-phone-token`에 저장돼서, 다시 켜도 같은 링크가 계속 열려요.
 

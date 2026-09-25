@@ -123,8 +123,9 @@ Options:
                         listens on the Wi-Fi network. Keeps one token across
                         restarts and prints the phone link with a QR code.
                         Port defaults to 3100.
-  --install-autostart   (Windows) Start in phone mode, hidden, every time you
-                        log in, working in the current folder
+  --install-autostart   (Windows) Start in phone mode every time you log in,
+                        working in the current folder, and open the office in
+                        the browser (add --no-open to start without it)
   --remove-autostart    (Windows) Undo --install-autostart
   --help                Show this help message`);
       process.exit(0);
@@ -150,7 +151,11 @@ function openInBrowser(url: string): void {
 }
 
 /** Add or remove the log-in autostart entry, then exit. */
-function runAutostartCommand(action: 'install' | 'remove', port: number | undefined): never {
+function runAutostartCommand(
+  action: 'install' | 'remove',
+  port: number | undefined,
+  openOffice: boolean,
+): never {
   if (process.platform !== 'win32') {
     console.error(
       '[Bitteul Desk] Autostart is Windows-only for now. On macOS or Linux, add `bitteul-desk --phone --no-open` to your login items.',
@@ -179,10 +184,14 @@ function runAutostartCommand(action: 'install' | 'remove', port: number | undefi
     process.exit(1);
   }
   const log = path.join(os.homedir(), '.pixel-agents', 'bitteul-desk.log');
-  const args = ['--phone', '--no-open', '--port', String(port ?? PHONE_DEFAULT_PORT)];
+  const args = ['--phone', '--port', String(port ?? PHONE_DEFAULT_PORT)];
+  if (!openOffice) args.push('--no-open');
   writeStartupScript(file, startupScript(process.execPath, cli, process.cwd(), log, args));
   console.log(`[Bitteul Desk] Autostart installed: ${file}`);
-  console.log(`  From your next log-in, phone mode starts hidden in ${process.cwd()}`);
+  console.log(`  From your next log-in, phone mode starts in ${process.cwd()}`);
+  console.log(
+    openOffice ? '  and the office opens in your browser.' : '  without opening a browser.',
+  );
   console.log(`  Output goes to ${log}`);
   console.log('  To start it right now, run: bitteul-desk --phone');
   process.exit(0);
@@ -270,7 +279,7 @@ async function main(): Promise<void> {
     console.error(`[Pixel Agents] ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
-  if (args.autostart) runAutostartCommand(args.autostart, args.port);
+  if (args.autostart) runAutostartCommand(args.autostart, args.port, args.open);
 
   // dist/ contains both the CLI bundle and the assets/ + webview/ directories
   const distRoot = __dirname;
