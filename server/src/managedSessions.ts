@@ -18,6 +18,7 @@ import type {
 import { execFile } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 import type { MessageBlock } from './uploads.js';
@@ -109,6 +110,24 @@ const LIVE_CACHE_MS = 3000;
 const SUMMARY_CHARS = 200;
 const QUESTION_TOOL = 'AskUserQuestion';
 const MAX_ANSWER_CHARS = 2000;
+
+/** Claude in Chrome follows the user's own default (`/chrome` → enabled by default): an
+ *  interactive terminal session applies it, an SDK session does not unless told `--chrome`. */
+function chromeByDefault(log: (msg: string, extra?: Record<string, unknown>) => void): boolean {
+  const file = path.join(os.homedir(), '.claude.json');
+  try {
+    const config = JSON.parse(fs.readFileSync(file, 'utf-8')) as {
+      claudeInChromeDefaultEnabled?: unknown;
+    };
+    return config.claudeInChromeDefaultEnabled === true;
+  } catch (err) {
+    log('could not read the Claude in Chrome default; sessions start without it', {
+      file,
+      err: String(err),
+    });
+    return false;
+  }
+}
 
 export class DashboardSessionError extends Error {
   constructor(
@@ -462,6 +481,7 @@ export class ManagedSessions {
         ...(settings.model ? { model: settings.model } : {}),
         canUseTool,
         ...(opts.resume ? { resume: opts.resume } : {}),
+        ...(chromeByDefault(this.log) ? { extraArgs: { chrome: null } } : {}),
       },
     });
     const close = (): void => {
