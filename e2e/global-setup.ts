@@ -24,6 +24,22 @@ function readCachedVSCodePath(): string | null {
   }
 }
 
+/** @vscode/test-electron names the macOS binary `Contents/MacOS/Electron`, which newer
+ *  VS Code builds no longer ship; take the one executable that folder does hold. */
+function resolveVSCodeExecutable(reported: string): string {
+  if (fs.existsSync(reported)) return reported;
+  const dir = path.dirname(reported);
+  const entries = fs.existsSync(dir)
+    ? fs.readdirSync(dir).filter((name) => fs.statSync(path.join(dir, name)).isFile())
+    : [];
+  if (process.platform === 'darwin' && entries.length === 1) {
+    return path.join(dir, entries[0]);
+  }
+  throw new Error(
+    `VS Code executable not found at ${reported}; ${dir} holds: ${entries.join(', ') || '(nothing)'}`,
+  );
+}
+
 function tryAcquireDownloadLock(): boolean {
   fs.mkdirSync(VSCODE_CACHE_DIR, { recursive: true });
 
@@ -145,10 +161,12 @@ export default async function globalSetup(): Promise<void> {
       }
 
       console.log('[e2e] Ensuring VS Code is downloaded...');
-      const downloadedPath = await downloadAndUnzipVSCode({
-        version: 'stable',
-        cachePath: VSCODE_CACHE_DIR,
-      });
+      const downloadedPath = resolveVSCodeExecutable(
+        await downloadAndUnzipVSCode({
+          version: 'stable',
+          cachePath: VSCODE_CACHE_DIR,
+        }),
+      );
       console.log(`[e2e] VS Code executable: ${downloadedPath}`);
       patchProductJsonForWindows(downloadedPath);
       fs.writeFileSync(VSCODE_PATH_FILE, downloadedPath, 'utf8');

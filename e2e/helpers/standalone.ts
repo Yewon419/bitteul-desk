@@ -186,7 +186,7 @@ async function drainRecordedMessages(page: Page): Promise<RecordedServerMessage[
 /** The trailing `\s` is load-bearing: stdout arrives in chunks, and without a
  *  terminator a half-delivered line would match and yield a truncated URL that
  *  still parses (`http://127.0.0.1:501`). */
-const PRINTED_URL_PATTERN = /Pixel Agents server running at (\S+)\s/;
+const PRINTED_URL_PATTERN = /Classic Pixel Agents: (\S+)\s/;
 
 /**
  * Wait for the URL line the CLI prints on its own stdout, and hand back exactly
