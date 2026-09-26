@@ -24,6 +24,7 @@ export interface ConversationView {
 
 const MAX_ENTRY_CHARS = 4000;
 const MAX_TOOL_CHARS = 160;
+const QUESTION_TOOL = 'AskUserQuestion';
 const HIDDEN_USER_PREFIXES = [
   '<command-',
   '<local-command',
@@ -35,6 +36,9 @@ interface ContentBlock {
   type?: string;
   text?: string;
   name?: string;
+  /** tool_use id, and the tool_use a tool_result answers. */
+  id?: string;
+  tool_use_id?: string;
   input?: Record<string, unknown>;
   /** tool_result payload: plain text or text blocks. */
   content?: string | ContentBlock[];
@@ -49,6 +53,8 @@ interface TranscriptRecord {
   aiTitle?: string;
   customTitle?: string;
   message?: { content?: string | ContentBlock[] };
+  /** Structured tool output; for a question, the answers keyed by question text. */
+  toolUseResult?: unknown;
   /** A message typed while the agent was busy lands as a queued_command attachment. */
   attachment?: { type?: string; prompt?: string | ContentBlock[]; timestamp?: string };
 }
@@ -96,10 +102,37 @@ function userText(content: string | ContentBlock[] | undefined): string | null {
   return clip(trimmed, MAX_ENTRY_CHARS);
 }
 
+/** The questions an AskUserQuestion call put to the user, with their choices. */
+function questionText(input: Record<string, unknown> | undefined): string {
+  const questions = Array.isArray(input?.questions) ? input.questions : [];
+  const lines = questions.flatMap((q: unknown) => {
+    if (!q || typeof q !== 'object') return [];
+    const { question, options } = q as { question?: unknown; options?: unknown };
+    if (typeof question !== 'string') return [];
+    const labels = (Array.isArray(options) ? options : [])
+      .map((o: unknown) => (o && typeof o === 'object' ? (o as { label?: unknown }).label : null))
+      .filter((l): l is string => typeof l === 'string');
+    return [labels.length ? `· ${question} (${labels.join(' / ')})` : `· ${question}`];
+  });
+  return clip(['질문', ...lines].join('\n'), MAX_ENTRY_CHARS);
+}
+
+/** The user's answers to a question call, or null when it was not answered. */
+function answerText(toolUseResult: unknown): string | null {
+  if (!toolUseResult || typeof toolUseResult !== 'object') return null;
+  const answers = (toolUseResult as { answers?: unknown }).answers;
+  if (!answers || typeof answers !== 'object') return null;
+  const lines = Object.entries(answers as Record<string, unknown>)
+    .filter((e): e is [string, string] => typeof e[1] === 'string')
+    .map(([question, answer]) => `· ${question}\n  → ${answer}`);
+  return lines.length ? clip(['답변', ...lines].join('\n'), MAX_ENTRY_CHARS) : null;
+}
+
 export function parseConversation(jsonl: string, maxEntries: number): ConversationView {
   let aiTitle: string | null = null;
   let customTitle: string | null = null;
   const entries: ConversationEntry[] = [];
+  const questionIds = new Set<string>();
   for (const line of jsonl.split('\n')) {
     if (!line.trim()) continue;
     let rec: TranscriptRecord;
@@ -119,9 +152,16 @@ export function parseConversation(jsonl: string, maxEntries: number): Conversati
         withMedia(entry, blockText(content), rec.cwd);
         entries.push(entry);
       } else if (Array.isArray(content)) {
+        const results = content.filter((b) => b.type === 'tool_result');
+        const answer = results.some((b) => b.tool_use_id && questionIds.has(b.tool_use_id))
+          ? answerText(rec.toolUseResult)
+          : null;
+        if (answer) {
+          entries.push({ kind: 'user', text: answer, timestamp: rec.timestamp });
+          continue;
+        }
         // A tool's output ("saved to out.png") belongs to the tool call before it.
         const last = entries[entries.length - 1];
-        const results = content.filter((b) => b.type === 'tool_result');
         if (last?.kind === 'tool' && results.length) {
           withMedia(last, blockText(results), rec.cwd);
         }
@@ -145,6 +185,13 @@ export function parseConversation(jsonl: string, maxEntries: number): Conversati
           };
           withMedia(entry, block.text, rec.cwd);
           entries.push(entry);
+        } else if (block.type === 'tool_use' && block.name === QUESTION_TOOL) {
+          if (block.id) questionIds.add(block.id);
+          entries.push({
+            kind: 'assistant',
+            text: questionText(block.input),
+            timestamp: rec.timestamp,
+          });
         } else if (block.type === 'tool_use') {
           const entry: ConversationEntry = {
             kind: 'tool',

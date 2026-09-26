@@ -80,6 +80,42 @@ describe('parseConversation', () => {
     );
     expect(view.entries).toEqual([{ kind: 'user', text: '이것도 고쳐줘', timestamp: 't8' }]);
   });
+
+  it('shows a question with its choices, then the answers given', () => {
+    const view = parseConversation(
+      jsonl([
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'tool_use',
+                id: 'q1',
+                name: 'AskUserQuestion',
+                input: {
+                  questions: [
+                    { question: '시제는?', options: [{ label: '회고형' }, { label: '연출형' }] },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'q1', content: 'The user answered' }],
+          },
+          toolUseResult: { questions: [], answers: { '시제는?': '연출형' } },
+        },
+      ]),
+      100,
+    );
+    expect(view.entries.map((e) => [e.kind, e.text])).toEqual([
+      ['assistant', '질문\n· 시제는? (회고형 / 연출형)'],
+      ['user', '답변\n· 시제는?\n  → 연출형'],
+    ]);
+  });
 });
 
 describe('dashboard routes', () => {
