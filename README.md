@@ -39,7 +39,7 @@ Claude Code를 쓰는 프로젝트 폴더에서 아래 한 줄을 실행하세�
 
 ```bash
 cd 내-프로젝트-폴더
-npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.4/bitteul-desk-0.1.4.tgz
+npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.5/bitteul-desk-0.1.5.tgz
 ```
 
 켜지면 브라우저가 자동으로 사무실 화면을 열어요. 브라우저가 안 열리면 터미널에 찍힌 `Bitteul Desk office:` 주소를 직접 여세요. 끌 때는 터미널에서 **Ctrl+C**를 누르면 돼요.
@@ -47,7 +47,7 @@ npx https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.4/bitteul-de
 매번 긴 주소를 치기 싫으면 전역으로 설치해 두세요.
 
 ```bash
-npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.4/bitteul-desk-0.1.4.tgz
+npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.5/bitteul-desk-0.1.5.tgz
 bitteul-desk
 ```
 
@@ -93,7 +93,7 @@ bitteul-desk --help
 3. **폰 연결.** PC 사무실 화면 왼쪽 위의 **폰 연결**을 누르면 QR이 떠요. 폰 카메라로 찍어서 열고, 브라우저 메뉴에서 **홈 화면에 추가**를 눌러 두세요.
 4. **PC 켤 때 자동으로 켜기 (Windows).** 한 번 전역 설치한 뒤, 일 시킬 폴더에서 아래를 실행하세요.
    ```bash
-   npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.4/bitteul-desk-0.1.4.tgz
+   npm install --global https://github.com/Yewon419/bitteul-desk/releases/download/v0.1.5/bitteul-desk-0.1.5.tgz
    bitteul-desk --install-autostart
    ```
    다음 로그인부터 폰 모드가 켜지고 사무실 화면이 브라우저에 열려요. 화면 없이 서버만 켜고 싶으면 `bitteul-desk --install-autostart --no-open`으로 등록하세요. 등록은 레지스트리의 사용자 시작 프로그램(`HKCU\...\Run`)에 `BitteulDesk`라는 이름으로 들어가고, 작업 관리자의 시작 앱 탭에서도 보여요. 이전 버전이 시작 프로그램 폴더에 넣은 `bitteul-desk.vbs`는 다시 등록할 때 자동으로 지워져요. 기록은 `~/.pixel-agents/bitteul-desk.log`에 남아요. 끄려면 `bitteul-desk --remove-autostart`를 실행하세요.
