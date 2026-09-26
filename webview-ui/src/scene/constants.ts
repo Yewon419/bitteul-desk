@@ -1,6 +1,6 @@
 /** Bitteul scene view: colours, fonts and timing. Colour literals are allowed only here. */
 
-export const SCENE_PAGE_BG = '#0f1a2a';
+export const SCENE_PAGE_BG = '#3b4c65';
 
 export const SCREEN_ON_BG = '#12305a';
 export const SCREEN_ON_GLOW = 'rgba(95, 227, 255, 0.55)';
