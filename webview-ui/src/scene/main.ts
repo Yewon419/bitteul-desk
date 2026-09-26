@@ -765,15 +765,19 @@ async function start(): Promise<void> {
   let sceneW = roomW * cols;
   let sceneH = roomH;
 
+  const toolbar = document.getElementById('toolbar');
+
   function fit(): void {
     if (!canvas) return;
     const compact = window.innerWidth < COMPACT_MAX_WIDTH_PX;
     cols = compact ? 1 : layout.rooms;
     sceneW = roomW * cols;
     sceneH = roomH * ((floors * layout.rooms) / cols);
+    // The toolbar sits above the canvas in the page flow, so a room has to fit below it.
+    const roomSpace = window.innerHeight - (toolbar?.offsetHeight ?? 0);
     const scale = compact
       ? window.innerWidth / sceneW
-      : Math.min(window.innerWidth / sceneW, window.innerHeight / roomH);
+      : Math.min(window.innerWidth / sceneW, roomSpace / roomH);
     const factor = Math.max(1, Math.round(scale * window.devicePixelRatio));
     canvas.width = sceneW * factor;
     canvas.height = sceneH * factor;
@@ -782,6 +786,8 @@ async function start(): Promise<void> {
   }
   fit();
   window.addEventListener('resize', fit);
+  // The toolbar starts hidden and appears once the server answers, taking height from the room.
+  if (toolbar) new ResizeObserver(fit).observe(toolbar);
 
   transport.onMessage(handle);
   transport.send({ type: 'webviewReady' });

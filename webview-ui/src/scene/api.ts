@@ -168,7 +168,11 @@ export function openChatWindow(
     return 'focused';
   }
   const name = sessionId ? `bitteul-chat-${sessionId}` : `bitteul-chat-new-${Date.now()}`;
-  const win = window.open('', name, 'popup,width=760,height=900');
+  // Window size excludes the title bar and frame; the margin keeps the whole window on a
+  // short screen (a 1440p monitor at 150% leaves under 960px).
+  const width = Math.min(760, window.screen.availWidth - 40);
+  const height = Math.min(900, window.screen.availHeight - 100);
+  const win = window.open('', name, `popup,width=${width},height=${height}`);
   if (!win) return 'blocked';
   let alreadyThere: boolean;
   try {
