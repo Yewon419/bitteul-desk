@@ -114,6 +114,49 @@ function clock(ts: string | undefined): string {
     : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+/** Where a bare URL really ends. GFM runs it to the next space, so in Korean, where a
+ *  particle follows with no space ("(http://x/)를"), the link swallowed ")를". A Hangul
+ *  letter or a ")" with no "(" to close ends it; agents write Hangul in URLs encoded. */
+function bareUrlLength(url: string): number {
+  let depth = 0;
+  for (let i = 0; i < url.length; i++) {
+    const ch = url[i];
+    if (/[ᄀ-ᇿ㄰-㆏가-힣]/.test(ch)) return i;
+    if (ch === '(') depth++;
+    if (ch === ')' && depth-- === 0) return i;
+  }
+  return url.length;
+}
+
+marked.use({
+  tokenizer: {
+    url(src) {
+      const token = marked.Tokenizer.prototype.url.call(this, src);
+      if (!token || token.href.startsWith('mailto:')) return token ?? false;
+      let end = bareUrlLength(token.text);
+      while (end > 0 && '.,:;!?\'"'.includes(token.text[end - 1])) end--;
+      const cut = token.text.length - end;
+      if (cut === 0 || end === 0) return token;
+      const text = token.text.slice(0, end);
+      return {
+        ...token,
+        raw: token.raw.slice(0, token.raw.length - cut),
+        text,
+        href: token.href.slice(0, token.href.length - cut),
+        tokens: [{ type: 'text', raw: text, text, escaped: false }],
+      };
+    },
+  },
+});
+
+// Links open in a new tab, so the chat window never navigates away from the conversation.
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node instanceof HTMLAnchorElement && /^https?:$/.test(node.protocol)) {
+    node.target = '_blank';
+    node.rel = 'noopener noreferrer';
+  }
+});
+
 function markdown(text: string): string {
   return DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }));
 }
