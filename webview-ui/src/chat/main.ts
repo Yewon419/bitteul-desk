@@ -17,6 +17,7 @@ import {
   type PermissionAsk,
   postJson,
   type Question,
+  takeChatDraft,
 } from '../scene/api.js';
 import {
   type CatalogCommand,
@@ -527,7 +528,7 @@ async function send(): Promise<void> {
       });
       sessionId = res.sessionId;
       creating = false;
-      announceChatWindow(sessionId);
+      announceChatWindow(sessionId, () => input.value);
       const next = new URLSearchParams({ token, session: sessionId });
       window.history.replaceState(null, '', `?${next.toString()}`);
       setTitle('새 직원 출근 중…');
@@ -1066,7 +1067,10 @@ if (!token) {
   sendBtn.disabled = true;
 } else {
   backEl.href = `./scene.html?${new URLSearchParams({ token }).toString()}`;
-  if (sessionId) announceChatWindow(sessionId);
+  if (sessionId) {
+    input.value = takeChatDraft(sessionId) ?? '';
+    announceChatWindow(sessionId, () => input.value);
+  }
   setTitle(creating ? '새 직원 부르기' : '불러오는 중…');
   renderStatus();
   void loadUserName()

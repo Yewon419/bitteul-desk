@@ -100,11 +100,12 @@ export function chatUrl(token: string, sessionId: string | null, seat?: number):
 }
 
 // ── One chat window per session ──────────────────────────────
-// A chat window checks in every couple of seconds; any office tab can see that and bring the
-// existing window forward instead of opening a second one. Named windows alone are not
-// enough: a name is only found from the tab that opened it.
+// A chat window checks in every couple of seconds. Opening a session that already has a
+// window closes that one and opens a fresh window, which comes up in front. Browsers ignore
+// focus() on an existing window, and a window only knows the tab that opened it by name.
 
 const CHAT_OPEN_KEY = 'bitteul-chat-open:';
+const CHAT_DRAFT_KEY = 'bitteul-chat-draft:';
 const CHAT_CHANNEL = 'bitteul-chat';
 const CHAT_HEARTBEAT_MS = 2000;
 const CHAT_STALE_MS = 6000;
@@ -122,8 +123,10 @@ function channel(): BroadcastChannel | null {
   return typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(CHAT_CHANNEL);
 }
 
-/** Called by a chat window: keep checking in and come forward when an office tab asks. */
-export function announceChatWindow(sessionId: string): () => void {
+/** Called by a chat window: keep checking in, and step aside for a fresh window when an
+ *  office tab reopens this session, handing over the unsent text. */
+export function announceChatWindow(sessionId: string, unsentText: () => string): () => void {
+  let replaced = false;
   const beat = (): void => {
     try {
       window.localStorage.setItem(CHAT_OPEN_KEY + sessionId, String(Date.now()));
@@ -134,12 +137,22 @@ export function announceChatWindow(sessionId: string): () => void {
   beat();
   const timer = window.setInterval(beat, CHAT_HEARTBEAT_MS);
   const bc = channel();
-  bc?.addEventListener('message', (ev: MessageEvent<{ focus?: string }>) => {
-    if (ev.data?.focus === sessionId) window.focus();
+  bc?.addEventListener('message', (ev: MessageEvent<{ replace?: string }>) => {
+    if (ev.data?.replace !== sessionId) return;
+    replaced = true;
+    try {
+      const text = unsentText();
+      if (text.trim()) window.localStorage.setItem(CHAT_DRAFT_KEY + sessionId, text);
+    } catch {
+      // The draft is lost with the window; nothing else is.
+    }
+    window.close();
   });
   const stop = (): void => {
     window.clearInterval(timer);
     bc?.close();
+    // The replacement is already checking in under this key.
+    if (replaced) return;
     try {
       window.localStorage.removeItem(CHAT_OPEN_KEY + sessionId);
     } catch {
@@ -150,12 +163,20 @@ export function announceChatWindow(sessionId: string): () => void {
   return stop;
 }
 
-export type ChatOpenResult = 'opened' | 'focused' | 'blocked';
+/** Unsent text a replaced window left for this session, taken once. */
+export function takeChatDraft(sessionId: string): string | null {
+  try {
+    const text = window.localStorage.getItem(CHAT_DRAFT_KEY + sessionId);
+    window.localStorage.removeItem(CHAT_DRAFT_KEY + sessionId);
+    return text;
+  } catch {
+    return null;
+  }
+}
 
-/**
- * Open the chat window for one session, or bring forward the one already open anywhere.
- * An existing window is never reloaded.
- */
+export type ChatOpenResult = 'opened' | 'blocked';
+
+/** Open the chat window for one session, replacing the one already open anywhere. */
 export function openChatWindow(
   token: string,
   sessionId: string | null,
@@ -163,24 +184,19 @@ export function openChatWindow(
 ): ChatOpenResult {
   if (sessionId && chatIsOpen(sessionId)) {
     const bc = channel();
-    bc?.postMessage({ focus: sessionId });
+    bc?.postMessage({ replace: sessionId });
     bc?.close();
-    return 'focused';
   }
-  const name = sessionId ? `bitteul-chat-${sessionId}` : `bitteul-chat-new-${Date.now()}`;
+  // A fresh name every time: reusing one would land in the old window before it closes.
+  const name = `bitteul-chat-${sessionId ?? 'new'}-${Date.now()}`;
   // Window size excludes the title bar and frame; the margin keeps the whole window on a
   // short screen (a 1440p monitor at 150% leaves under 960px).
   const width = Math.min(760, window.screen.availWidth - 40);
   const height = Math.min(900, window.screen.availHeight - 100);
-  const win = window.open('', name, `popup,width=${width},height=${height}`);
-  if (!win) return 'blocked';
-  let alreadyThere: boolean;
-  try {
-    alreadyThere = win.location.pathname.endsWith('chat.html');
-  } catch {
-    alreadyThere = false;
-  }
-  if (!alreadyThere) win.location.href = chatUrl(token, sessionId, seat);
-  win.focus();
-  return alreadyThere ? 'focused' : 'opened';
+  const win = window.open(
+    chatUrl(token, sessionId, seat),
+    name,
+    `popup,width=${width},height=${height}`,
+  );
+  return win ? 'opened' : 'blocked';
 }

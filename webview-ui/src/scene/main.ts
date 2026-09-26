@@ -702,12 +702,7 @@ function openChat(token: string, sessionId: string | null, seat?: number): void 
     window.location.assign(chatUrl(token, sessionId, seat));
     return;
   }
-  const result = openChatWindow(token, sessionId, seat);
-  if (result === 'focused') {
-    showToast('이 직원의 대화 창은 이미 열려 있어요. 그 창을 앞으로 가져왔어요.');
-    return;
-  }
-  if (result === 'opened') return;
+  if (openChatWindow(token, sessionId, seat) === 'opened') return;
   showToast('브라우저가 대화 창(팝업)을 막았어요.', {
     href: chatUrl(token, sessionId, seat),
     label: '여기를 눌러 열기',
