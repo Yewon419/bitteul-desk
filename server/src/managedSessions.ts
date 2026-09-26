@@ -249,14 +249,14 @@ export class ManagedSessions {
     return next;
   }
 
-  /** Slash commands and models the CLI offers. Needs one live session to have asked once. */
+  /** Slash commands and models the CLI offers. Without a live session, a short-lived CLI
+   *  that is never sent a prompt answers instead (no turn, no tokens). */
   async catalog(sessionId: string): Promise<SessionCatalog> {
     const session = this.sessions.get(sessionId) ?? [...this.sessions.values()][0];
-    if (!session) return this.catalogCache ?? { commands: [], models: [] };
-    const [commands, models] = await Promise.all([
-      session.query.supportedCommands(),
-      session.query.supportedModels(),
-    ]);
+    if (!session && this.catalogCache) return this.catalogCache;
+    const [commands, models] = session
+      ? await Promise.all([session.query.supportedCommands(), session.query.supportedModels()])
+      : await this.probeCatalog();
     this.catalogCache = {
       commands: commands.map((c: SlashCommand) => ({
         name: c.name,
@@ -270,6 +270,28 @@ export class ManagedSessions {
       })),
     };
     return this.catalogCache;
+  }
+
+  private async probeCatalog(): Promise<[SlashCommand[], ModelInfo[]]> {
+    const { query } = await import('@anthropic-ai/claude-agent-sdk');
+    let release: (() => void) | null = null;
+    const idle = new Promise<void>((r) => (release = r));
+    const prompt: AsyncIterable<SDKUserMessage> = {
+      async *[Symbol.asyncIterator]() {
+        await idle;
+      },
+    };
+    const q = query({
+      prompt,
+      options: { pathToClaudeCodeExecutable: this.claudeExe, cwd: this.cwd },
+    });
+    try {
+      return await Promise.all([q.supportedCommands(), q.supportedModels()]);
+    } finally {
+      (release as (() => void) | null)?.();
+      q.close();
+      this.log('catalog probed without a session');
+    }
   }
 
   /** Session ids of interactive sessions currently running in a terminal (`claude agents --json`). */
