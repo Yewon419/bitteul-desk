@@ -48,6 +48,14 @@
       .tools summary::-webkit-details-marker { display: none; }
       .tools summary::before { content: '▸'; color: var(--accent); }
       .tools[open] summary::before { content: '▾'; }
+      .media-strip { display: flex; flex-wrap: wrap; gap: 10px; margin: -4px 0 16px; }
+      .media { margin: 0; display: flex; flex-direction: column; gap: 4px; max-width: min(100%, 420px); }
+      .media img { max-width: 100%; max-height: 320px; object-fit: contain; border: 1px solid var(--line); border-radius: 6px; background: #0b1520; cursor: zoom-in; }
+      .media video { width: min(100%, 420px); max-height: 320px; border-radius: 6px; background: #000; }
+      .media-audio { width: min(100%, 360px); }
+      .media audio { width: 100%; }
+      .media figcaption { font-family: var(--code); font-size: 11.5px; color: var(--dim); overflow-wrap: anywhere; }
+      .media-note { font-size: 12px; color: var(--dim); padding: 10px 12px; border: 1px dashed var(--line); border-radius: 6px; }
       .tools-count { color: var(--text); white-space: nowrap; }
       .tools-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .tools .msg-tool { margin: 4px 0 0 16px; }

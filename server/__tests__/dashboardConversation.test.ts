@@ -110,6 +110,34 @@ describe('dashboard routes', () => {
   const url = (p: string) => `http://127.0.0.1:${handle.port.toString()}${p}`;
   const auth = { Authorization: `Bearer ${TOKEN}` };
 
+  it('serves a media file the transcript mentions, and nothing else', async () => {
+    const pic = path.join(dir, 'result.png');
+    const secret = path.join(dir, 'other.png');
+    fs.writeFileSync(pic, 'PNGDATA');
+    fs.writeFileSync(secret, 'SECRET');
+    fs.appendFileSync(
+      path.join(dir, 'session.jsonl'),
+      `\n${JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: `다 만들었어: ${pic}` }] },
+      })}\n`,
+    );
+    const media = (p: string) => url(`/api/dashboard/agents/7/media?path=${encodeURIComponent(p)}`);
+    const ok = await fetch(media(pic), { headers: auth });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('content-type')).toBe('image/png');
+    expect(await ok.text()).toBe('PNGDATA');
+    expect((await fetch(media(pic))).status).toBe(401);
+    expect((await fetch(media(secret), { headers: auth })).status).toBe(404);
+    expect((await fetch(media(path.join(dir, 'session.jsonl')), { headers: auth })).status).toBe(
+      404,
+    );
+    const convo = (await (
+      await fetch(url('/api/dashboard/agents/7/conversation'), { headers: auth })
+    ).json()) as { entries: Array<{ media?: Array<{ path: string; kind: string }> }> };
+    expect(convo.entries.at(-1)?.media).toMatchObject([{ path: pic, kind: 'image' }]);
+  });
+
   it('refuses requests without the server token', async () => {
     expect((await fetch(url('/api/dashboard/agents'))).status).toBe(401);
     expect((await fetch(url('/api/dashboard/agents/7/conversation'))).status).toBe(401);

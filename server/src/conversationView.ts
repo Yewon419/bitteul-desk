@@ -5,12 +5,16 @@
 
 import * as fs from 'fs';
 
+import { findMediaPaths } from './mediaPreview.js';
+
 export type EntryKind = 'user' | 'assistant' | 'tool';
 
 export interface ConversationEntry {
   kind: EntryKind;
   text: string;
   timestamp?: string;
+  /** Picture, video and sound files this entry mentions, as absolute paths. */
+  media?: string[];
 }
 
 export interface ConversationView {
@@ -32,6 +36,8 @@ interface ContentBlock {
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
+  /** tool_result payload: plain text or text blocks. */
+  content?: string | ContentBlock[];
 }
 
 interface TranscriptRecord {
@@ -39,6 +45,7 @@ interface TranscriptRecord {
   isSidechain?: boolean;
   isMeta?: boolean;
   timestamp?: string;
+  cwd?: string;
   aiTitle?: string;
   customTitle?: string;
   message?: { content?: string | ContentBlock[] };
@@ -62,6 +69,18 @@ function toolLine(block: ContentBlock): string {
     detail ? `${block.name ?? 'tool'}: ${detail}` : (block.name ?? 'tool'),
     MAX_TOOL_CHARS,
   );
+}
+
+function blockText(content: string | ContentBlock[] | undefined): string {
+  if (typeof content === 'string') return content;
+  return (content ?? [])
+    .map((b) => (typeof b.text === 'string' ? b.text : blockText(b.content)))
+    .join('\n');
+}
+
+function withMedia(entry: ConversationEntry, source: string, cwd: string | undefined): void {
+  const found = findMediaPaths(source, cwd);
+  if (found.length) entry.media = [...new Set([...(entry.media ?? []), ...found])];
 }
 
 function userText(content: string | ContentBlock[] | undefined): string | null {
@@ -95,7 +114,18 @@ export function parseConversation(jsonl: string, maxEntries: number): Conversati
     const content = rec.message?.content;
     if (rec.type === 'user') {
       const text = userText(content);
-      if (text) entries.push({ kind: 'user', text, timestamp: rec.timestamp });
+      if (text) {
+        const entry: ConversationEntry = { kind: 'user', text, timestamp: rec.timestamp };
+        withMedia(entry, blockText(content), rec.cwd);
+        entries.push(entry);
+      } else if (Array.isArray(content)) {
+        // A tool's output ("saved to out.png") belongs to the tool call before it.
+        const last = entries[entries.length - 1];
+        const results = content.filter((b) => b.type === 'tool_result');
+        if (last?.kind === 'tool' && results.length) {
+          withMedia(last, blockText(results), rec.cwd);
+        }
+      }
     } else if (rec.type === 'attachment' && rec.attachment?.type === 'queued_command') {
       const text = userText(rec.attachment.prompt);
       if (text) {
@@ -108,13 +138,22 @@ export function parseConversation(jsonl: string, maxEntries: number): Conversati
     } else if (rec.type === 'assistant' && Array.isArray(content)) {
       for (const block of content) {
         if (block.type === 'text' && block.text?.trim()) {
-          entries.push({
+          const entry: ConversationEntry = {
             kind: 'assistant',
             text: clip(block.text.trim(), MAX_ENTRY_CHARS),
             timestamp: rec.timestamp,
-          });
+          };
+          withMedia(entry, block.text, rec.cwd);
+          entries.push(entry);
         } else if (block.type === 'tool_use') {
-          entries.push({ kind: 'tool', text: toolLine(block), timestamp: rec.timestamp });
+          const entry: ConversationEntry = {
+            kind: 'tool',
+            text: toolLine(block),
+            timestamp: rec.timestamp,
+          };
+          const inputs = Object.values(block.input ?? {}).filter((v) => typeof v === 'string');
+          withMedia(entry, inputs.join('\n'), rec.cwd);
+          entries.push(entry);
         }
       }
     }

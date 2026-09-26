@@ -1,9 +1,20 @@
 /** Token-gated dashboard API shared by the office scene and the chat windows. */
 
+export interface MediaRef {
+  path: string;
+  name: string;
+  kind: 'image' | 'video' | 'audio';
+  size: number;
+  version: number;
+  tooLarge: boolean;
+}
+
 export interface ConversationEntry {
   kind: 'user' | 'assistant' | 'tool';
   text: string;
   timestamp?: string;
+  /** Pictures, videos and sound files the entry mentions that exist on disk now. */
+  media?: MediaRef[];
 }
 
 export interface ConversationResponse {

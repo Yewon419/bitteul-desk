@@ -37,6 +37,7 @@ import {
   ManagedSessions,
   resolveClaudeExecutable,
 } from './managedSessions.js';
+import { describeMedia, MAX_PREVIEW_BYTES, mediaType } from './mediaPreview.js';
 import { type PhoneLink, qrSvg } from './phoneAccess.js';
 import { MAX_ROOM_TITLE, SceneState } from './sceneState.js';
 import type { AgentState } from './types.js';
@@ -303,7 +304,58 @@ function registerDashboardRoutes(
     async (request, reply) => {
       const agent = options.store.get(Number(request.params.id));
       if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
-      return { id: agent.id, ...conversations.get(agent.jsonlFile) };
+      const view = conversations.get(agent.jsonlFile);
+      return {
+        id: agent.id,
+        title: view.title,
+        entries: view.entries.map((e) =>
+          e.media ? { ...e, media: describeMedia(e.media) } : { ...e },
+        ),
+      };
+    },
+  );
+
+  // Preview bytes for the chat. Only a file this session's transcript mentions is served,
+  // so the token cannot be turned into a way to read arbitrary files.
+  app.get<{ Params: { id: string }; Querystring: { path: string } }>(
+    '/api/dashboard/agents/:id/media',
+    {
+      ...auth,
+      schema: {
+        params: AGENT_ID_PARAMS,
+        querystring: {
+          type: 'object',
+          required: ['path'],
+          properties: { path: { type: 'string', minLength: 1, maxLength: 4096 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const agent = options.store.get(Number(request.params.id));
+      if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
+      const wanted = request.query.path;
+      const mentioned = conversations
+        .get(agent.jsonlFile)
+        .entries.some((e) => e.media?.includes(wanted));
+      const type = mediaType(wanted);
+      if (!mentioned || !type) {
+        return reply.code(404).send({ error: `not a media file of this session: ${wanted}` });
+      }
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(wanted);
+      } catch (err) {
+        return reply.code(404).send({ error: `cannot read ${wanted}: ${String(err)}` });
+      }
+      if (!stat.isFile() || stat.size > MAX_PREVIEW_BYTES) {
+        return reply.code(413).send({ error: `too large to preview: ${stat.size} bytes` });
+      }
+      return reply
+        .header('Content-Type', type.mime)
+        .header('Content-Length', stat.size)
+        .header('Cache-Control', 'no-store')
+        .header('X-Content-Type-Options', 'nosniff')
+        .send(fs.createReadStream(wanted));
     },
   );
 

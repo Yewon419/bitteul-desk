@@ -13,6 +13,7 @@ import {
   type ConversationEntry,
   type ConversationResponse,
   fetchJson,
+  type MediaRef,
   type PermissionAsk,
   postJson,
   type Question,
@@ -151,18 +152,99 @@ function renderToolRun(run: ConversationEntry[]): HTMLElement[] {
   return [box];
 }
 
+// ── Previews of the pictures, videos and sounds the agent works on ──
+
+/** Kept across re-renders: polling rebuilds the log, and a playing video must not restart. */
+const mediaNodes = new Map<string, HTMLElement>();
+/** The object URL shown for each path, released when a newer version of the file replaces it. */
+const mediaUrls = new Map<string, { key: string; url: string }>();
+
+async function loadMedia(m: MediaRef, key: string, holder: HTMLElement): Promise<void> {
+  if (!meta) return;
+  try {
+    const res = await fetch(
+      `./api/dashboard/agents/${meta.id}/media?path=${encodeURIComponent(m.path)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    const url = URL.createObjectURL(await res.blob());
+    const previous = mediaUrls.get(m.path);
+    if (previous && previous.key !== key) {
+      URL.revokeObjectURL(previous.url);
+      mediaNodes.delete(previous.key);
+    }
+    mediaUrls.set(m.path, { key, url });
+    let node: HTMLElement;
+    if (m.kind === 'image') {
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = m.name;
+      img.title = '눌러서 크게 보기';
+      img.addEventListener('click', () => window.open(url, '_blank'));
+      node = img;
+    } else {
+      const player = document.createElement(m.kind);
+      player.controls = true;
+      player.preload = 'metadata';
+      player.src = url;
+      node = player;
+    }
+    holder.replaceWith(node);
+  } catch (err) {
+    holder.textContent = `미리보기를 불러오지 못했어요: ${String(err)}`;
+  }
+}
+
+function mediaNode(m: MediaRef): HTMLElement {
+  const key = `${m.path}|${m.version}`;
+  const cached = mediaNodes.get(key);
+  if (cached) return cached;
+  const box = el('figure', `media media-${m.kind}`);
+  const caption = el('figcaption', '', `${m.name} · ${formatSize(m.size)}`);
+  caption.title = m.path;
+  const holder = el(
+    'div',
+    'media-note',
+    m.tooLarge ? '파일이 너무 커서 미리보기는 생략했어요' : '불러오는 중…',
+  );
+  box.append(holder, caption);
+  mediaNodes.set(key, box);
+  if (!m.tooLarge) void loadMedia(m, key, holder);
+  return box;
+}
+
+function renderMedia(media: MediaRef[]): HTMLElement[] {
+  if (media.length === 0) return [];
+  const strip = el('div', 'media-strip');
+  strip.append(...media.map(mediaNode));
+  return [strip];
+}
+
 function renderLog(entries: ConversationEntry[]): HTMLElement[] {
+  // A file mentioned many times is previewed once, at its latest mention.
+  const lastMention = new Map<string, number>();
+  entries.forEach((e, i) => e.media?.forEach((m) => lastMention.set(m.path, i)));
+  const mediaOf = (e: ConversationEntry, i: number): MediaRef[] =>
+    (e.media ?? []).filter((m) => lastMention.get(m.path) === i);
+
   const out: HTMLElement[] = [];
   let run: ConversationEntry[] = [];
-  for (const entry of entries) {
+  let runMedia: MediaRef[] = [];
+  const flushRun = (): void => {
+    out.push(...renderToolRun(run), ...renderMedia(runMedia));
+    run = [];
+    runMedia = [];
+  };
+  entries.forEach((entry, i) => {
     if (entry.kind === 'tool') {
       run.push(entry);
-      continue;
+      runMedia.push(...mediaOf(entry, i));
+      return;
     }
-    out.push(...renderToolRun(run), renderEntry(entry));
-    run = [];
-  }
-  out.push(...renderToolRun(run));
+    flushRun();
+    out.push(renderEntry(entry), ...renderMedia(mediaOf(entry, i)));
+  });
+  flushRun();
   return out;
 }
 
@@ -414,7 +496,8 @@ async function pollConversation(): Promise<void> {
   errorEl.textContent = profileError;
   if (data.title) setTitle(data.title);
   const last = data.entries[data.entries.length - 1];
-  const signature = `${data.entries.length}:${last?.text.length ?? 0}`;
+  const versions = data.entries.flatMap((e) => (e.media ?? []).map((m) => m.version));
+  const signature = `${data.entries.length}:${last?.text.length ?? 0}:${versions.join(',')}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
   const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < STICK_TO_BOTTOM_PX;
