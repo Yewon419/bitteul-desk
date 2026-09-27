@@ -8,7 +8,7 @@
 import type { ServerMessage } from '../../../core/src/messages.js';
 import { transport } from '../transport/index.js';
 import { Ambient, type AmbientData } from './ambient.js';
-import { type AgentMeta, chatUrl, fetchJson, openChatWindow, postJson } from './api.js';
+import { type AgentMeta, chatIsOpen, chatUrl, fetchJson, openChatWindow, postJson } from './api.js';
 import {
   ALERT_BLINK_MS,
   BLINK_EVERY_MS,
@@ -29,6 +29,7 @@ import {
   FONT_BODY,
   FONT_BOLD,
   FONT_BUBBLE,
+  FONT_OPEN_TAG,
   FONT_SIGN,
   FONT_SMALL,
   FONT_TITLE,
@@ -37,6 +38,9 @@ import {
   HOLO_FILL,
   HOLO_TEXT,
   LONG_PRESS_MS,
+  OPEN_TAG_BG,
+  OPEN_TAG_LABEL,
+  OPEN_TAG_TEXT,
   POLL_FAILURES_BEFORE_TOAST,
   READ_FRAME_MS,
   ROOM_TIME_SHIFT_MS,
@@ -458,6 +462,7 @@ function drawBubble(
   bottom: number,
   text: string,
   alert: boolean,
+  chatOpen: boolean,
 ): void {
   ctx.save();
   ctx.font = FONT_BUBBLE;
@@ -479,6 +484,18 @@ function drawBubble(
   ctx.fillStyle = BUBBLE_TEXT;
   ctx.textBaseline = 'middle';
   ctx.fillText(text, x + padX, y + height / 2 + 1);
+  if (chatOpen) {
+    ctx.font = FONT_OPEN_TAG;
+    const tagW = Math.ceil(ctx.measureText(OPEN_TAG_LABEL).width) + 20;
+    const tagH = 32;
+    const tagY = y - 3 - tagH - 4;
+    ctx.fillStyle = BUBBLE_BORDER;
+    ctx.fillRect(x - 3, tagY - 3, tagW + 6, tagH + 6);
+    ctx.fillStyle = OPEN_TAG_BG;
+    ctx.fillRect(x, tagY, tagW, tagH);
+    ctx.fillStyle = OPEN_TAG_TEXT;
+    ctx.fillText(OPEN_TAG_LABEL, x + 10, tagY + tagH / 2 + 1);
+  }
   ctx.restore();
 }
 
@@ -1176,7 +1193,11 @@ async function start(): Promise<void> {
     }
     const factor = canvas.width / sceneW;
     const working = ordered.filter((a) => moodOf(a) !== 'resting').length;
-    const bubbles: Array<[number, number, string, boolean]> = [];
+    const bubbles: Array<[number, number, string, boolean, boolean]> = [];
+    const chatOpenFor = (id: number): boolean => {
+      const sessionId = metas.get(id)?.sessionId;
+      return !!sessionId && chatIsOpen(sessionId);
+    };
     const hits: HitBox[] = [];
     const zones: HitBox[] = [];
     const empties: HitBox[] = [];
@@ -1254,6 +1275,7 @@ async function start(): Promise<void> {
             offsetY + top - lift,
             labelOf(a),
             moodOf(a) === 'alert',
+            chatOpenFor(a.id),
           ]);
         });
         ctx.drawImage(front, 0, 0);
@@ -1267,6 +1289,7 @@ async function start(): Promise<void> {
               offsetY + top,
               ACTIVITY_LABEL[b.activity],
               moodOf(a) === 'alert',
+              chatOpenFor(a.id),
             ]);
           });
         ambient.drawFront(ctx, roomT);
@@ -1289,7 +1312,9 @@ async function start(): Promise<void> {
       const target = inside(zones, drag.x, drag.y);
       if (target) drawDropTarget(ctx, target);
     }
-    bubbles.forEach(([cx, bottom, text, alert]) => drawBubble(ctx, cx, bottom, text, alert));
+    bubbles.forEach(([cx, bottom, text, alert, open]) =>
+      drawBubble(ctx, cx, bottom, text, alert, open),
+    );
     if (drag) {
       const a = agents.get(drag.id);
       if (a) drawCarried(ctx, a, staff, drag.x, drag.y, t);

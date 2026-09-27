@@ -110,7 +110,8 @@ const CHAT_CHANNEL = 'bitteul-chat';
 const CHAT_HEARTBEAT_MS = 2000;
 const CHAT_STALE_MS = 6000;
 
-function chatIsOpen(sessionId: string): boolean {
+/** A chat window for this session checked in lately (only windows in this browser can). */
+export function chatIsOpen(sessionId: string): boolean {
   try {
     const seen = Number(window.localStorage.getItem(CHAT_OPEN_KEY + sessionId));
     return Number.isFinite(seen) && Date.now() - seen < CHAT_STALE_MS;

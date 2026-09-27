@@ -15,6 +15,11 @@ export const BUBBLE_BG = 'rgba(246, 250, 252, 0.94)';
 export const BUBBLE_BORDER = '#13293d';
 export const BUBBLE_TEXT = '#13293d';
 export const BUBBLE_ALERT_BG = '#ffd166';
+/** Tag over a bubble whose agent already has a chat window open in this browser. */
+export const OPEN_TAG_BG = '#2b86c5';
+export const OPEN_TAG_TEXT = '#ffffff';
+export const OPEN_TAG_LABEL = '창 열림';
+export const FONT_OPEN_TAG = 'bold 22px Galmuri11';
 
 export const HOLO_FILL = 'rgba(95, 227, 255, 0.25)';
 export const HOLO_EDGE = 'rgba(95, 227, 255, 0.85)';
