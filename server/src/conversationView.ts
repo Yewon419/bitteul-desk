@@ -46,6 +46,9 @@ interface ContentBlock {
 
 interface TranscriptRecord {
   type?: string;
+  subtype?: string;
+  /** A system record's text; for local_command, the command or its output. */
+  content?: string;
   isSidechain?: boolean;
   isMeta?: boolean;
   timestamp?: string;
@@ -61,6 +64,28 @@ interface TranscriptRecord {
 
 function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function tagText(text: string, tag: string): string | null {
+  const match = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text);
+  return match ? match[1] : null;
+}
+
+/** A slash command the user ran ("/mcp") or what it printed, as the CLI records them:
+ *  tagged text in a user record or a local_command system record. */
+function commandEntry(text: string, timestamp: string | undefined): ConversationEntry | null {
+  const name = tagText(text, 'command-name');
+  if (name) {
+    const args = tagText(text, 'command-args')?.trim() ?? '';
+    return {
+      kind: 'user',
+      text: clip(args ? `${name} ${args}` : name, MAX_ENTRY_CHARS),
+      timestamp,
+    };
+  }
+  const output = tagText(text, 'local-command-stdout') ?? tagText(text, 'local-command-stderr');
+  const plain = output?.replace(/\x1b\[[0-9;]*m/g, '').trim();
+  return plain ? { kind: 'assistant', text: clip(plain, MAX_ENTRY_CHARS), timestamp } : null;
 }
 
 function toolLine(block: ContentBlock): string {
@@ -145,7 +170,26 @@ export function parseConversation(jsonl: string, maxEntries: number): Conversati
     if (rec.type === 'custom-title' && rec.customTitle) customTitle = rec.customTitle;
     if (rec.isSidechain || rec.isMeta) continue;
     const content = rec.message?.content;
+    if (rec.type === 'system' && rec.subtype === 'local_command' && rec.content) {
+      const entry = commandEntry(rec.content, rec.timestamp);
+      if (entry) entries.push(entry);
+      continue;
+    }
     if (rec.type === 'user') {
+      // Only a record that IS a command, never a tool output that happens to quote one.
+      const typed = (
+        typeof content === 'string'
+          ? content
+          : (content ?? [])
+              .filter((b) => b.type === 'text')
+              .map((b) => b.text ?? '')
+              .join('\n')
+      ).trim();
+      if (typed.startsWith('<command-') || typed.startsWith('<local-command-std')) {
+        const entry = commandEntry(typed, rec.timestamp);
+        if (entry) entries.push(entry);
+        continue;
+      }
       const text = userText(content);
       if (text) {
         const entry: ConversationEntry = { kind: 'user', text, timestamp: rec.timestamp };
@@ -206,6 +250,31 @@ export function parseConversation(jsonl: string, maxEntries: number): Conversati
     }
   }
   return { title: customTitle ?? aiTitle, entries: entries.slice(-maxEntries) };
+}
+
+/** The folder the session last worked in, from the newest records (the tail only: a
+ *  transcript can run past 100MB). Null when no record in the tail names one. */
+export function readSessionCwd(jsonlFile: string): string | null {
+  const TAIL_BYTES = 256 * 1024;
+  const fd = fs.openSync(jsonlFile, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const length = Math.min(size, TAIL_BYTES);
+    const buf = Buffer.alloc(length);
+    fs.readSync(fd, buf, 0, length, size - length);
+    const lines = buf.toString('utf-8').split('\n').reverse();
+    for (const line of lines) {
+      try {
+        const cwd = (JSON.parse(line) as TranscriptRecord).cwd;
+        if (typeof cwd === 'string' && cwd) return cwd;
+      } catch {
+        // the cut first line or a partial last one
+      }
+    }
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 export function readConversation(jsonlFile: string, maxEntries: number): ConversationView {

@@ -22,7 +22,7 @@ import {
   WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_CLOSE_UNAUTHORIZED,
 } from './constants.js';
-import { ConversationCache } from './conversationView.js';
+import { ConversationCache, readSessionCwd } from './conversationView.js';
 import {
   BOARD_FIELDS,
   type BoardPatch,
@@ -40,6 +40,7 @@ import {
 import { describeMedia, MAX_PREVIEW_BYTES, mediaType } from './mediaPreview.js';
 import { type PhoneLink, qrSvg } from './phoneAccess.js';
 import { MAX_ROOM_TITLE, SceneState } from './sceneState.js';
+import { openSessionInTerminal } from './terminalLaunch.js';
 import type { AgentState } from './types.js';
 import {
   type Attachment,
@@ -499,6 +500,50 @@ function registerDashboardRoutes(
     if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
     return sendOrFail(reply, () => managed.catalog(''));
   });
+
+  // Take a session from the terminal Claude holding it (idle only), so the phone or another
+  // browser can carry on: the next message sent here resumes it under the dashboard.
+  app.post<{ Params: { id: string } }>(
+    '/api/dashboard/agents/:id/take-over',
+    { ...auth, schema: { params: AGENT_ID_PARAMS } },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      const agent = options.store.get(Number(request.params.id));
+      if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
+      const sessionId = sessionOf(agent);
+      return sendOrFail(reply, async () => {
+        await managed.takeOver(sessionId);
+        app.log.info(
+          { id: agent.id, sessionId },
+          'dashboard: session taken over from its terminal',
+        );
+      });
+    },
+  );
+
+  // Reopen in a terminal on this PC, for what only an interactive session can do (the
+  // claude.ai Artifact tools). A dashboard session is ended first so one process holds it.
+  app.post<{ Params: { id: string } }>(
+    '/api/dashboard/agents/:id/open-terminal',
+    { ...auth, schema: { params: AGENT_ID_PARAMS } },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      const agent = options.store.get(Number(request.params.id));
+      if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
+      const sessionId = sessionOf(agent);
+      if (managed.isBusy(sessionId) || managed.pendingFor(sessionId).length > 0) {
+        return reply.code(409).send({ error: 'agent is working or waiting for approval' });
+      }
+      if ((await managed.liveTerminalSessions()).has(sessionId)) {
+        return reply.code(409).send({ error: 'already open in a terminal' });
+      }
+      const cwd = readSessionCwd(agent.jsonlFile) ?? os.homedir();
+      managed.end(sessionId);
+      await openSessionInTerminal(sessionId, cwd, managed.claudeExe);
+      app.log.info({ id: agent.id, sessionId, cwd }, 'dashboard: session reopened in a terminal');
+      return { ok: true };
+    },
+  );
 
   // "퇴근": take the agent out of the office. A dashboard session is ended too; a terminal
   // session keeps running in its terminal and only leaves the office. Busy or waiting-for-

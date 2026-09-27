@@ -47,6 +47,7 @@ describe('parseConversation', () => {
     const view = parseConversation(jsonl(RECORDS), 100);
     expect(view.title).toBe('빛뜰 대시보드');
     expect(view.entries).toEqual([
+      { kind: 'user', text: '/model', timestamp: undefined },
       { kind: 'user', text: '로봇 모양 말고 클로드로 가자', timestamp: 't1' },
       { kind: 'assistant', text: '클로드 캐릭터로 바꾸겠습니다.', timestamp: undefined },
       { kind: 'tool', text: 'Bash: Build it', timestamp: undefined },
@@ -79,6 +80,45 @@ describe('parseConversation', () => {
       100,
     );
     expect(view.entries).toEqual([{ kind: 'user', text: '이것도 고쳐줘', timestamp: 't8' }]);
+  });
+
+  it('shows a slash command and what it printed, but not a tool output quoting one', () => {
+    const view = parseConversation(
+      jsonl([
+        {
+          type: 'user',
+          message: {
+            content:
+              '<command-name>/mcp</command-name>\n<command-message>mcp</command-message>\n<command-args></command-args>',
+          },
+        },
+        {
+          type: 'system',
+          subtype: 'local_command',
+          content:
+            '<local-command-stdout>\u001b[1m10 MCP server(s)\u001b[22m: 7 connected</local-command-stdout>',
+        },
+        {
+          type: 'user',
+          message: {
+            content:
+              '<command-message>humanize</command-message>\n<command-name>/humanize</command-name>\n<command-args>이 글</command-args>',
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', content: '<command-name>/grep</command-name>' }],
+          },
+        },
+      ]),
+      100,
+    );
+    expect(view.entries.map((e) => [e.kind, e.text])).toEqual([
+      ['user', '/mcp'],
+      ['assistant', '10 MCP server(s): 7 connected'],
+      ['user', '/humanize 이 글'],
+    ]);
   });
 
   it('shows a question with its choices, then the answers given', () => {
@@ -200,7 +240,7 @@ describe('dashboard routes', () => {
     const convo = (await (
       await fetch(url('/api/dashboard/agents/7/conversation'), { headers: auth })
     ).json()) as { entries: unknown[] };
-    expect(convo.entries).toHaveLength(3);
+    expect(convo.entries).toHaveLength(4);
     expect(
       (await fetch(url('/api/dashboard/agents/99/conversation'), { headers: auth })).status,
     ).toBe(404);
@@ -329,6 +369,19 @@ describe('dashboard routes', () => {
       });
     expect((await dismiss({})).status).toBe(401);
     expect((await dismiss(auth)).status).toBe(503);
+  });
+
+  it('guards moving a session between terminal and dashboard with the token', async () => {
+    for (const route of ['take-over', 'open-terminal']) {
+      const post = (headers: Record<string, string>) =>
+        fetch(url(`/api/dashboard/agents/7/${route}`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: '{}',
+        });
+      expect((await post({})).status).toBe(401);
+      expect([404, 503]).toContain((await post(auth)).status);
+    }
   });
 
   it('answers the pairing request only with the token, and with no links outside phone mode', async () => {

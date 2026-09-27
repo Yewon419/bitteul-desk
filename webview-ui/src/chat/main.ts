@@ -64,6 +64,8 @@ const sendBtn = byId<HTMLButtonElement>('send');
 const errorEl = byId<HTMLParagraphElement>('error');
 const backEl = byId<HTMLAnchorElement>('back');
 const dismissBtn = byId<HTMLButtonElement>('dismiss');
+const terminalBtn = byId<HTMLButtonElement>('to-terminal');
+const takeOverBtn = byId<HTMLButtonElement>('take-over');
 const stopBtn = byId<HTMLButtonElement>('stop');
 const controlsEl = byId<HTMLDivElement>('controls');
 const modeSelect = byId<HTMLSelectElement>('mode');
@@ -327,7 +329,8 @@ function renderStatus(): void {
     status = '승인 대기';
   } else if (meta.owner === 'terminal') {
     status = '보기 전용';
-    note = '터미널에서 열려 있는 세션입니다. 터미널을 닫으면 여기서 이어받을 수 있어요.';
+    note =
+      '터미널에서 열려 있는 세션입니다. 터미널이 쉬는 중일 때 "여기서 이어받기"를 누르면 이 창에서 이어서 조작할 수 있어요.';
     locked = true;
   } else if (meta.busy) {
     status = '작업 중';
@@ -341,6 +344,15 @@ function renderStatus(): void {
   }
   renderControls();
   stopBtn.hidden = creating || dismissed || !meta || meta.owner !== 'dashboard' || !meta.busy;
+  takeOverBtn.hidden = !meta || creating || dismissed || meta.owner !== 'terminal';
+  // Opens a window on the PC, so a phone never offers it.
+  terminalBtn.hidden =
+    !meta ||
+    creating ||
+    dismissed ||
+    meta.owner === 'terminal' ||
+    window.matchMedia(TOUCH_MEDIA).matches;
+  terminalBtn.disabled = !meta || meta.busy || meta.pending.length > 0;
   dismissBtn.hidden = !meta || creating || dismissed;
   dismissBtn.disabled = !meta || meta.busy || meta.pending.length > 0;
   dismissBtn.title =
@@ -626,6 +638,40 @@ async function dismiss(): Promise<void> {
 }
 
 dismissBtn.addEventListener('click', () => void dismiss());
+
+async function openInTerminal(): Promise<void> {
+  if (!meta || terminalBtn.disabled) return;
+  terminalBtn.disabled = true;
+  try {
+    await postJson(`./api/dashboard/agents/${meta.id}/open-terminal`, token, {});
+    noteEl.textContent = '터미널에서 이어서 열었어요. 이제 이 창은 보기 전용이에요.';
+  } catch (err) {
+    errorEl.textContent = String(err).includes('409')
+      ? '작업 중이거나 승인을 기다리는 중이라 지금은 옮길 수 없어요. 이미 터미널에서 열려 있을 수도 있어요.'
+      : `터미널에서 열지 못했어요: ${String(err)}`;
+    terminalBtn.disabled = false;
+  }
+}
+
+terminalBtn.addEventListener('click', () => void openInTerminal());
+
+async function takeOver(): Promise<void> {
+  if (!meta || takeOverBtn.disabled) return;
+  takeOverBtn.disabled = true;
+  errorEl.textContent = '';
+  try {
+    await postJson(`./api/dashboard/agents/${meta.id}/take-over`, token, {});
+    noteEl.textContent = '이어받았어요. 이제 여기서 보내면 이 세션이 이어서 움직여요.';
+  } catch (err) {
+    errorEl.textContent = String(err).includes('409')
+      ? '터미널에서 아직 작업 중이에요. 끝나고 다시 눌러 주세요.'
+      : `이어받지 못했어요: ${String(err)}`;
+  } finally {
+    takeOverBtn.disabled = false;
+  }
+}
+
+takeOverBtn.addEventListener('click', () => void takeOver());
 
 input.addEventListener('keydown', (ev) => {
   if (window.matchMedia(TOUCH_MEDIA).matches) return;

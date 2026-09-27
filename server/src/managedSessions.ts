@@ -104,9 +104,22 @@ interface LiveSession {
   sessionId?: string;
   kind?: string;
   pid?: number;
+  /** Interactive sessions: 'idle' between turns, 'busy' inside one. */
+  status?: string;
 }
 
 const LIVE_CACHE_MS = 3000;
+const TAKE_OVER_WAIT_MS = 5000;
+
+/** Signal 0 probes without killing; EPERM still means the process exists. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 const SUMMARY_CHARS = 200;
 const QUESTION_TOOL = 'AskUserQuestion';
 const MAX_ANSWER_CHARS = 2000;
@@ -205,7 +218,8 @@ export class ManagedSessions {
 
   constructor(
     private readonly cwd: string,
-    private readonly claudeExe: string,
+    /** The Claude Code executable itself (not a .cmd/.ps1 shim), for anything that launches it. */
+    readonly claudeExe: string,
     private readonly log: (msg: string, extra?: Record<string, unknown>) => void,
   ) {}
 
@@ -316,18 +330,7 @@ export class ManagedSessions {
   /** Session ids of interactive sessions currently running in a terminal (`claude agents --json`). */
   async liveTerminalSessions(): Promise<Set<string>> {
     if (this.liveCache && Date.now() - this.liveCache.at < LIVE_CACHE_MS) return this.liveCache.ids;
-    const stdout = await new Promise<string>((resolve, reject) => {
-      execFile(
-        this.claudeExe,
-        ['agents', '--json'],
-        { timeout: 15000, windowsHide: true },
-        (err, out, errOut) => {
-          if (err) reject(new Error(`claude agents --json failed: ${err.message} ${errOut}`));
-          else resolve(out);
-        },
-      );
-    });
-    const list = JSON.parse(stdout) as LiveSession[];
+    const list = await this.listAgents();
     const ids = new Set(
       list
         .filter(
@@ -340,6 +343,46 @@ export class ManagedSessions {
     );
     this.liveCache = { at: Date.now(), ids };
     return ids;
+  }
+
+  /** Take a session away from the terminal Claude holding it, so the next message from the
+   *  dashboard resumes it here. Only between turns: a busy one is refused. */
+  async takeOver(sessionId: string): Promise<void> {
+    const live = (await this.listAgents()).find(
+      (s) => s.sessionId === sessionId && s.pid !== undefined && !this.sessions.has(sessionId),
+    );
+    if (!live || live.pid === undefined) {
+      throw new DashboardSessionError('session is not open in a terminal', 404);
+    }
+    if (live.status !== 'idle') {
+      throw new DashboardSessionError(`terminal session is ${live.status ?? 'not idle'}`, 409);
+    }
+    const pid = live.pid;
+    this.log('taking a session over from its terminal', { sessionId, pid });
+    process.kill(pid);
+    for (let waited = 0; waited < TAKE_OVER_WAIT_MS; waited += 100) {
+      if (!processAlive(pid)) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (processAlive(pid)) {
+      throw new DashboardSessionError(`terminal Claude (pid ${pid}) did not exit`, 500);
+    }
+    this.liveCache = null;
+  }
+
+  private async listAgents(): Promise<LiveSession[]> {
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        this.claudeExe,
+        ['agents', '--json'],
+        { timeout: 15000, windowsHide: true },
+        (err, out, errOut) => {
+          if (err) reject(new Error(`claude agents --json failed: ${err.message} ${errOut}`));
+          else resolve(out);
+        },
+      );
+    });
+    return JSON.parse(stdout) as LiveSession[];
   }
 
   /** Send a turn to a session, resuming it under the dashboard if nothing else holds it. */
