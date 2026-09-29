@@ -110,6 +110,9 @@ interface LiveSession {
 
 const LIVE_CACHE_MS = 3000;
 const TAKE_OVER_WAIT_MS = 5000;
+/** A /desk hand-off waits this long for the terminal turn to end, checking every poll. */
+const HANDOFF_WAIT_MS = 30 * 60_000;
+const HANDOFF_POLL_MS = 2000;
 
 /** Signal 0 probes without killing; EPERM still means the process exists. */
 function processAlive(pid: number): boolean {
@@ -149,6 +152,14 @@ export class DashboardSessionError extends Error {
   ) {
     super(message);
   }
+}
+
+function toCommandList(commands: SlashCommand[]): SessionCatalog['commands'] {
+  return commands.map((c) => ({
+    name: c.name,
+    description: c.description,
+    argumentHint: c.argumentHint,
+  }));
 }
 
 /** Resolve the installed claude executable: env override, else next to the npm shim on PATH. */
@@ -213,8 +224,8 @@ export class ManagedSessions {
   private liveCache: { at: number; ids: Set<string> } | null = null;
   /** Mode/model chosen for a session before the dashboard holds it; applied when it opens. */
   private readonly preferred = new Map<string, SessionSettings>();
-  /** Commands and models the CLI reported last; the same for every session on this machine. */
-  private catalogCache: SessionCatalog | null = null;
+  /** What the CLI binary on disk reported, tagged with that binary so an update re-probes. */
+  private catalogCache: { stamp: string; catalog: SessionCatalog } | null = null;
 
   constructor(
     private readonly cwd: string,
@@ -285,24 +296,36 @@ export class ManagedSessions {
   /** Slash commands and models the CLI offers. Without a live session, a short-lived CLI
    *  that is never sent a prompt answers instead (no turn, no tokens). */
   async catalog(sessionId: string): Promise<SessionCatalog> {
+    const stamp = this.exeStamp();
+    if (this.catalogCache?.stamp !== stamp) {
+      const [commands, models] = await this.probeCatalog();
+      this.catalogCache = {
+        stamp,
+        catalog: {
+          commands: toCommandList(commands),
+          models: models.map((m: ModelInfo) => ({
+            value: m.value,
+            displayName: m.displayName,
+            description: m.description,
+          })),
+        },
+      };
+    }
+    const { catalog } = this.catalogCache;
     const session = this.sessions.get(sessionId) ?? [...this.sessions.values()][0];
-    if (!session && this.catalogCache) return this.catalogCache;
-    const [commands, models] = session
-      ? await Promise.all([session.query.supportedCommands(), session.query.supportedModels()])
-      : await this.probeCatalog();
-    this.catalogCache = {
-      commands: commands.map((c: SlashCommand) => ({
-        name: c.name,
-        description: c.description,
-        argumentHint: c.argumentHint,
-      })),
-      models: models.map((m: ModelInfo) => ({
-        value: m.value,
-        displayName: m.displayName,
-        description: m.description,
-      })),
+    if (!session) return catalog;
+    // A live session knows its own commands (project skills, plugins). Its models are not
+    // asked: a session started before a CLI update still reports the old release's list.
+    return {
+      commands: toCommandList(await session.query.supportedCommands()),
+      models: catalog.models,
     };
-    return this.catalogCache;
+  }
+
+  /** Changes when Claude Code updates itself, which replaces the executable in place. */
+  private exeStamp(): string {
+    const st = fs.statSync(this.claudeExe);
+    return `${st.mtimeMs}:${st.size}`;
   }
 
   private async probeCatalog(): Promise<[SlashCommand[], ModelInfo[]]> {
@@ -368,6 +391,38 @@ export class ManagedSessions {
       throw new DashboardSessionError(`terminal Claude (pid ${pid}) did not exit`, 500);
     }
     this.liveCache = null;
+  }
+
+  /** /desk from a terminal: once that terminal Claude is idle (the turn that ran /desk has
+   *  ended), take the session over. Resolves as soon as the request is accepted; the pid must
+   *  be the terminal Claude holding this very session, so no other process can be stopped. */
+  async handoffWhenIdle(sessionId: string, pid: number): Promise<void> {
+    const live = (await this.listAgents()).find(
+      (s) => s.sessionId === sessionId && s.pid === pid && !this.sessions.has(sessionId),
+    );
+    if (!live) {
+      throw new DashboardSessionError(`pid ${pid} is not a terminal holding ${sessionId}`, 404);
+    }
+    this.log('hand-off requested from the terminal', { sessionId, pid });
+    void (async () => {
+      for (let waited = 0; waited < HANDOFF_WAIT_MS; waited += HANDOFF_POLL_MS) {
+        await new Promise((r) => setTimeout(r, HANDOFF_POLL_MS));
+        const now = (await this.listAgents()).find(
+          (s) => s.sessionId === sessionId && s.pid === pid,
+        );
+        if (!now) {
+          this.log('hand-off: the terminal closed on its own', { sessionId, pid });
+          return;
+        }
+        if (now.status !== 'idle') continue;
+        await this.takeOver(sessionId);
+        this.log('hand-off done: the dashboard holds the session now', { sessionId, pid });
+        return;
+      }
+      this.log('hand-off gave up: the terminal stayed busy', { sessionId, pid });
+    })().catch((err: unknown) => {
+      this.log('hand-off failed', { sessionId, pid, err: String(err) });
+    });
   }
 
   private async listAgents(): Promise<LiveSession[]> {

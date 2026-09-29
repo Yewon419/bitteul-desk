@@ -521,6 +521,30 @@ function registerDashboardRoutes(
     },
   );
 
+  // /desk in a terminal: stop that terminal Claude once its current turn ends, so the
+  // session carries on from the office (phone, tablet, another browser).
+  app.post<{ Body: { sessionId: string; pid: number } }>(
+    '/api/dashboard/handoff',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['sessionId', 'pid'],
+          properties: {
+            sessionId: { type: 'string', minLength: 1 },
+            pid: { type: 'integer', minimum: 1 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      const { sessionId, pid } = request.body;
+      return sendOrFail(reply, () => managed.handoffWhenIdle(sessionId, pid));
+    },
+  );
+
   // Reopen in a terminal on this PC, for what only an interactive session can do (the
   // claude.ai Artifact tools). A dashboard session is ended first so one process holds it.
   app.post<{ Params: { id: string } }>(

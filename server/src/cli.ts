@@ -39,6 +39,7 @@ import {
   readConfig,
 } from './configPersistence.js';
 import { MAX_PORT, MIN_PORT } from './constants.js';
+import { installDeskCommand, removeDeskCommand, requestHandoff } from './deskCommand.js';
 import { FileStateAdapter } from './fileStateAdapter.js';
 import {
   detectTailscale,
@@ -69,6 +70,8 @@ export interface CliArgs {
   hostGiven: boolean;
   /** Add or remove the Windows log-in autostart instead of starting the server. */
   autostart: 'install' | 'remove' | null;
+  /** /desk: hand this terminal session to the office, or add/remove the slash command. */
+  desk: 'handoff' | 'install' | 'remove' | null;
 }
 
 /** Phone mode wants a stable address, so it defaults to a fixed port. */
@@ -86,6 +89,7 @@ export function parseArgs(argv: string[]): CliArgs {
     phone: false,
     hostGiven: false,
     autostart: null,
+    desk: null,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port' || argv[i] === '-p') {
@@ -115,6 +119,12 @@ export function parseArgs(argv: string[]): CliArgs {
       args.autostart = 'install';
     } else if (argv[i] === '--remove-autostart') {
       args.autostart = 'remove';
+    } else if (argv[i] === '--handoff') {
+      args.desk = 'handoff';
+    } else if (argv[i] === '--install-desk-command') {
+      args.desk = 'install';
+    } else if (argv[i] === '--remove-desk-command') {
+      args.desk = 'remove';
     } else if (argv[i] === '--help') {
       console.log(`Usage: bitteul-desk [options]
 
@@ -131,6 +141,12 @@ Options:
                         working in the current folder, and open the office in
                         the browser (add --no-open to start without it)
   --remove-autostart    (Windows) Undo --install-autostart
+  --install-desk-command
+                        Add /desk to Claude Code (~/.claude/commands/desk.md):
+                        typed in a terminal session, it hands the session to
+                        the office once that reply ends
+  --remove-desk-command Undo --install-desk-command
+  --handoff             What /desk runs; only works inside Claude Code
   --help                Show this help message`);
       process.exit(0);
     }
@@ -199,6 +215,36 @@ function runAutostartCommand(
   );
   console.log(`  Output goes to ${log}`);
   console.log('  To start it right now, run: bitteul-desk --phone');
+  process.exit(0);
+}
+
+/** /desk: hand the session over, or add/remove the slash command, then exit. */
+async function runDeskCommand(action: 'handoff' | 'install' | 'remove'): Promise<never> {
+  try {
+    if (action === 'handoff') {
+      console.log(await requestHandoff(process.env));
+    } else if (action === 'remove') {
+      const removed = removeDeskCommand();
+      console.log(
+        removed
+          ? `[Bitteul Desk] Removed ${removed}`
+          : '[Bitteul Desk] No /desk command to remove.',
+      );
+    } else {
+      const cli = __filename;
+      if (isEphemeralInstall(cli)) {
+        throw new Error(
+          'This copy runs from the npx cache, which can be cleaned at any time. Install it with npm install --global first.',
+        );
+      }
+      const file = installDeskCommand(process.execPath, cli);
+      console.log(`[Bitteul Desk] /desk installed: ${file}`);
+      console.log('  Type /desk in a terminal Claude Code session to carry it on from the office.');
+    }
+  } catch (err) {
+    console.error(`[Bitteul Desk] ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
   process.exit(0);
 }
 
@@ -285,6 +331,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   if (args.autostart) runAutostartCommand(args.autostart, args.port, args.open);
+  if (args.desk) await runDeskCommand(args.desk);
 
   // dist/ contains both the CLI bundle and the assets/ + webview/ directories
   const distRoot = __dirname;

@@ -382,6 +382,14 @@ describe('dashboard routes', () => {
       expect((await post({})).status).toBe(401);
       expect([404, 503]).toContain((await post(auth)).status);
     }
+    const handoff = (headers: Record<string, string>) =>
+      fetch(url('/api/dashboard/handoff'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ sessionId: 'abc', pid: 1234 }),
+      });
+    expect((await handoff({})).status).toBe(401);
+    expect([404, 503]).toContain((await handoff(auth)).status);
   });
 
   it('answers the pairing request only with the token, and with no links outside phone mode', async () => {
