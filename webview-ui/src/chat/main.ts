@@ -204,6 +204,11 @@ function renderToolRun(run: ConversationEntry[]): HTMLElement[] {
 const mediaNodes = new Map<string, HTMLElement>();
 /** The object URL shown for each path, released when a newer version of the file replaces it. */
 const mediaUrls = new Map<string, { key: string; url: string }>();
+const MEDIA_LABEL: Record<MediaRef['kind'], string> = {
+  image: '사진',
+  video: '영상',
+  audio: '소리',
+};
 
 async function loadMedia(m: MediaRef, key: string, holder: HTMLElement): Promise<void> {
   if (!meta) return;
@@ -248,14 +253,28 @@ function mediaNode(m: MediaRef): HTMLElement {
   const box = el('figure', `media media-${m.kind}`);
   const caption = el('figcaption', '', `${m.name} · ${formatSize(m.size)}`);
   caption.title = m.path;
-  const holder = el(
-    'div',
-    'media-note',
-    m.tooLarge ? '파일이 너무 커서 미리보기는 생략했어요' : '불러오는 중…',
-  );
-  box.append(holder, caption);
+  box.append(caption);
   mediaNodes.set(key, box);
-  if (!m.tooLarge) void loadMedia(m, key, holder);
+  if (m.tooLarge) {
+    box.prepend(el('div', 'media-note', '파일이 너무 커서 미리보기는 생략했어요'));
+  } else if (window.matchMedia(TOUCH_MEDIA).matches) {
+    // Low-data on phones and tablets: nothing downloads until the preview is tapped.
+    const tap = el('button', 'media-note media-tap', `눌러서 ${MEDIA_LABEL[m.kind]} 보기`);
+    tap.setAttribute('type', 'button');
+    tap.addEventListener(
+      'click',
+      () => {
+        tap.textContent = '불러오는 중…';
+        void loadMedia(m, key, tap);
+      },
+      { once: true },
+    );
+    box.prepend(tap);
+  } else {
+    const holder = el('div', 'media-note', '불러오는 중…');
+    box.prepend(holder);
+    void loadMedia(m, key, holder);
+  }
   return box;
 }
 
