@@ -100,6 +100,8 @@
       #controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 6px 18px; font-size: 12px; color: var(--dim); border-bottom: 1px solid var(--line); background: var(--surface); }
       #controls[hidden] { display: none; }
       #controls label { display: flex; gap: 6px; align-items: center; }
+      #controls label[hidden] { display: none; }
+      #low-data { width: 20px; height: 20px; margin: 0; accent-color: var(--accent); }
       #controls select { font: inherit; font-size: 12px; padding: 3px 6px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
       #picker:empty { display: none; }
       #working { display: flex; gap: 8px; align-items: baseline; padding: 4px 22px 10px; font-size: 13px; color: var(--accent-strong); }
@@ -171,8 +173,9 @@
       <button id="dismiss" class="btn" type="button" hidden>퇴근</button>
     </header>
     <div id="controls" hidden>
-      <label>모드 <select id="mode"></select></label>
-      <label>모델 <select id="model"></select></label>
+      <label id="mode-wrap">모드 <select id="mode"></select></label>
+      <label id="model-wrap">모델 <select id="model"></select></label>
+      <label id="low-data-wrap" hidden><input id="low-data" type="checkbox" /> 데이터 절약 (사진·영상은 눌러야 불러와요)</label>
     </div>
     <div id="log" role="log" aria-live="polite"></div>
     <div id="working" role="status" hidden><span class="wk-spin" aria-hidden="true"></span><span class="wk-text"></span><span class="wk-meta"></span></div>

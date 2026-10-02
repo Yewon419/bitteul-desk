@@ -209,6 +209,26 @@ const MEDIA_LABEL: Record<MediaRef['kind'], string> = {
   video: '영상',
   audio: '소리',
 };
+/** Per device: 'off' turns the touch low-data mode off; anything else leaves it on. */
+const LOW_DATA_KEY = 'bitteul-chat-low-data';
+const lowDataWrap = byId<HTMLLabelElement>('low-data-wrap');
+const lowDataBox = byId<HTMLInputElement>('low-data');
+const modeWrap = byId<HTMLLabelElement>('mode-wrap');
+const modelWrap = byId<HTMLLabelElement>('model-wrap');
+
+function lowDataOn(): boolean {
+  return window.matchMedia(TOUCH_MEDIA).matches && localStorage.getItem(LOW_DATA_KEY) !== 'off';
+}
+
+lowDataBox.addEventListener('change', () => {
+  localStorage.setItem(LOW_DATA_KEY, lowDataBox.checked ? 'on' : 'off');
+  // Turning it off loads what still waits for a tap; turning it on affects new previews only.
+  if (!lowDataBox.checked) {
+    for (const box of mediaNodes.values()) {
+      box.querySelector<HTMLButtonElement>('.media-tap')?.click();
+    }
+  }
+});
 
 async function loadMedia(m: MediaRef, key: string, holder: HTMLElement): Promise<void> {
   if (!meta) return;
@@ -257,7 +277,7 @@ function mediaNode(m: MediaRef): HTMLElement {
   mediaNodes.set(key, box);
   if (m.tooLarge) {
     box.prepend(el('div', 'media-note', '파일이 너무 커서 미리보기는 생략했어요'));
-  } else if (window.matchMedia(TOUCH_MEDIA).matches) {
+  } else if (lowDataOn()) {
     // Low-data on phones and tablets: nothing downloads until the preview is tapped.
     const tap = el('button', 'media-note media-tap', `눌러서 ${MEDIA_LABEL[m.kind]} 보기`);
     tap.setAttribute('type', 'button');
@@ -714,8 +734,13 @@ function modelName(value: string | null): string {
 
 function renderControls(): void {
   const usable = creating || (!!meta && !!meta.settings && meta.owner !== 'terminal');
-  controlsEl.hidden = !usable || dismissed;
-  if (controlsEl.hidden) return;
+  const touch = window.matchMedia(TOUCH_MEDIA).matches;
+  controlsEl.hidden = dismissed || (!usable && !touch);
+  lowDataWrap.hidden = !touch;
+  lowDataBox.checked = lowDataOn();
+  modeWrap.hidden = !usable;
+  modelWrap.hidden = !usable;
+  if (controlsEl.hidden || !usable) return;
   const { mode, model } = currentSettings();
   if (modeSelect.options.length === 0) {
     modeSelect.append(...DASHBOARD_MODES.map((m) => new Option(MODE_LABELS[m], m)));
