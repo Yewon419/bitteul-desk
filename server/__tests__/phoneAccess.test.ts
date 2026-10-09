@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   autostartScriptPath,
   isEphemeralInstall,
+  LOG_ROTATE_BYTES,
   runKeyCommand,
   startupScript,
   writeStartupScript,
@@ -176,6 +177,9 @@ describe('autostart script', () => {
         `require('fs').writeFileSync(${JSON.stringify(report)}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() })); console.log('started');`,
       );
       const log = path.join(dir, 'desk log.txt');
+      fs.writeFileSync(log, '');
+      fs.truncateSync(log, LOG_ROTATE_BYTES + 1);
+      fs.writeFileSync(`${log}.1`, 'older run');
       const script = path.join(dir, 'start.vbs');
       writeStartupScript(
         script,
@@ -194,7 +198,8 @@ describe('autostart script', () => {
       const seen = JSON.parse(fs.readFileSync(report, 'utf-8')) as { argv: string[]; cwd: string };
       expect(seen.argv).toEqual(['--phone', '--no-open', '--port', '3100']);
       expect(seen.cwd).toBe(work);
-      expect(fs.readFileSync(log, 'utf-8')).toContain('started');
+      expect(fs.readFileSync(log, 'utf-8').trim()).toBe('started');
+      expect(fs.statSync(`${log}.1`).size).toBe(LOG_ROTATE_BYTES + 1);
     },
     40_000,
   );

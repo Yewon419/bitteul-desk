@@ -102,6 +102,9 @@ const startTime = Date.now();
 export async function createHttpServer(options: HttpServerOptions): Promise<HttpServerHandle> {
   const app = Fastify({
     logger: !options.embedded,
+    // The dashboard polls several routes every few seconds; logging each request filled the
+    // autostart log by ~250MB a day. Warnings and errors are still logged.
+    disableRequestLogging: true,
     bodyLimit: MAX_HOOK_BODY_SIZE,
   });
 

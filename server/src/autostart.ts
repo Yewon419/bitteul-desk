@@ -14,6 +14,7 @@ const SCRIPT_NAME = 'bitteul-desk-autostart.vbs';
 const LEGACY_SCRIPT_NAME = 'bitteul-desk.vbs';
 const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 export const RUN_VALUE_NAME = 'BitteulDesk';
+export const LOG_ROTATE_BYTES = 10 * 1024 * 1024;
 
 /** VBScript string literal: quotes are escaped by doubling. */
 function vbs(text: string): string {
@@ -37,7 +38,8 @@ export function legacyStartupScriptPath(appData: string): string {
   );
 }
 
-/** The script: run node on the CLI in `cwd`, no window, output appended to `log`. */
+/** The script: run node on the CLI in `cwd`, no window, output appended to `log`. A log
+ *  past LOG_ROTATE_BYTES moves to `<log>.1` first, so only one earlier run is kept. */
 export function startupScript(
   node: string,
   cli: string,
@@ -50,6 +52,17 @@ export function startupScript(
     "' Bitteul Desk autostart. Created by `bitteul-desk --install-autostart`;",
     "' remove it with `bitteul-desk --remove-autostart`.",
     'Set shell = CreateObject("WScript.Shell")',
+    'Set fso = CreateObject("Scripting.FileSystemObject")',
+    `logFile = ${vbs(log)}`,
+    "' A log still held open by another server stays where it is.",
+    'On Error Resume Next',
+    'If fso.FileExists(logFile) Then',
+    `  If fso.GetFile(logFile).Size > ${LOG_ROTATE_BYTES} Then`,
+    '    If fso.FileExists(logFile & ".1") Then fso.DeleteFile logFile & ".1", True',
+    '    fso.MoveFile logFile, logFile & ".1"',
+    '  End If',
+    'End If',
+    'On Error GoTo 0',
     `shell.CurrentDirectory = ${vbs(cwd)}`,
     `shell.Run ${vbs(command)}, 0, False`,
     '',
