@@ -153,11 +153,20 @@ function answerText(toolUseResult: unknown): string | null {
   return lines.length ? clip(['답변', ...lines].join('\n'), MAX_ENTRY_CHARS) : null;
 }
 
-export function parseConversation(jsonl: string, maxEntries: number): ConversationView {
-  let aiTitle: string | null = null;
-  let customTitle: string | null = null;
-  const entries: ConversationEntry[] = [];
-  const questionIds = new Set<string>();
+/** What parsing has gathered so far, so a growing transcript is read once, not per poll. */
+interface ParseState {
+  aiTitle: string | null;
+  customTitle: string | null;
+  entries: ConversationEntry[];
+  questionIds: Set<string>;
+}
+
+function newParseState(): ParseState {
+  return { aiTitle: null, customTitle: null, entries: [], questionIds: new Set() };
+}
+
+function parseLines(state: ParseState, jsonl: string, maxEntries: number): void {
+  const { entries, questionIds } = state;
   for (const line of jsonl.split('\n')) {
     if (!line.trim()) continue;
     let rec: TranscriptRecord;
@@ -166,8 +175,8 @@ export function parseConversation(jsonl: string, maxEntries: number): Conversati
     } catch {
       continue; // a partially written last line
     }
-    if (rec.type === 'ai-title' && rec.aiTitle) aiTitle = rec.aiTitle;
-    if (rec.type === 'custom-title' && rec.customTitle) customTitle = rec.customTitle;
+    if (rec.type === 'ai-title' && rec.aiTitle) state.aiTitle = rec.aiTitle;
+    if (rec.type === 'custom-title' && rec.customTitle) state.customTitle = rec.customTitle;
     if (rec.isSidechain || rec.isMeta) continue;
     const content = rec.message?.content;
     if (rec.type === 'system' && rec.subtype === 'local_command' && rec.content) {
@@ -249,7 +258,18 @@ export function parseConversation(jsonl: string, maxEntries: number): Conversati
       }
     }
   }
-  return { title: customTitle ?? aiTitle, entries: entries.slice(-maxEntries) };
+  // Only the newest entry is ever touched again (a tool output joins its call).
+  if (entries.length > maxEntries) entries.splice(0, entries.length - maxEntries);
+}
+
+function viewOf(state: ParseState): ConversationView {
+  return { title: state.customTitle ?? state.aiTitle, entries: [...state.entries] };
+}
+
+export function parseConversation(jsonl: string, maxEntries: number): ConversationView {
+  const state = newParseState();
+  parseLines(state, jsonl, maxEntries);
+  return viewOf(state);
 }
 
 /** The folder the session last worked in, from the newest records (the tail only: a
@@ -281,21 +301,62 @@ export function readConversation(jsonlFile: string, maxEntries: number): Convers
   return parseConversation(fs.readFileSync(jsonlFile, 'utf-8'), maxEntries);
 }
 
-/** Re-parses a transcript only when its size or mtime changed. */
+interface CachedTranscript {
+  /** Bytes parsed so far: always the end of a complete line. */
+  offset: number;
+  size: number;
+  mtimeMs: number;
+  state: ParseState;
+  view: ConversationView;
+}
+
+/** Parses a transcript once, then only the lines appended since. A live session's
+ *  transcript changes every few seconds and can pass 100MB, so a full re-parse per
+ *  poll blocks the server for seconds. A file that shrank is parsed again from the start. */
 export class ConversationCache {
-  private readonly cache = new Map<
-    string,
-    { size: number; mtimeMs: number; view: ConversationView }
-  >();
+  private readonly cache = new Map<string, CachedTranscript>();
 
   constructor(private readonly maxEntries: number) {}
 
   get(jsonlFile: string): ConversationView {
     const stat = fs.statSync(jsonlFile);
-    const hit = this.cache.get(jsonlFile);
+    let hit = this.cache.get(jsonlFile);
     if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return hit.view;
-    const view = readConversation(jsonlFile, this.maxEntries);
-    this.cache.set(jsonlFile, { size: stat.size, mtimeMs: stat.mtimeMs, view });
-    return view;
+    if (!hit || stat.size < hit.offset) {
+      hit = {
+        offset: 0,
+        size: 0,
+        mtimeMs: 0,
+        state: newParseState(),
+        view: viewOf(newParseState()),
+      };
+    }
+    const added = readFrom(jsonlFile, hit.offset, stat.size);
+    const end = added.lastIndexOf(0x0a) + 1; // a partly written last line waits for the next read
+    if (end > 0) {
+      parseLines(hit.state, added.subarray(0, end).toString('utf-8'), this.maxEntries);
+      hit.offset += end;
+      hit.view = viewOf(hit.state);
+    }
+    hit.size = stat.size;
+    hit.mtimeMs = stat.mtimeMs;
+    this.cache.set(jsonlFile, hit);
+    return hit.view;
+  }
+}
+
+function readFrom(file: string, start: number, end: number): Buffer {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buf = Buffer.alloc(Math.max(0, end - start));
+    let read = 0;
+    while (read < buf.length) {
+      const n = fs.readSync(fd, buf, read, buf.length - read, start + read);
+      if (n === 0) break;
+      read += n;
+    }
+    return buf.subarray(0, read);
+  } finally {
+    fs.closeSync(fd);
   }
 }

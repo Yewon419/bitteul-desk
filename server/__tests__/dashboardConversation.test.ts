@@ -5,7 +5,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AgentStateStore } from '../src/agentStateStore.js';
-import { parseConversation } from '../src/conversationView.js';
+import { ConversationCache, parseConversation } from '../src/conversationView.js';
 import { createHttpServer, type HttpServerHandle } from '../src/httpServer.js';
 import { parseQuestions } from '../src/managedSessions.js';
 import type { AgentState } from '../src/types.js';
@@ -155,6 +155,42 @@ describe('parseConversation', () => {
       ['assistant', '질문\n· 시제는? (회고형 / 연출형)'],
       ['user', '답변\n· 시제는?\n  → 연출형'],
     ]);
+  });
+});
+
+describe('ConversationCache', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bitteul-conv-'));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads only appended lines and matches a full parse, waiting out a half-written line', () => {
+    const file = path.join(dir, 's.jsonl');
+    const lines = RECORDS.map((r) => JSON.stringify(r) + '\n');
+    const cache = new ConversationCache(100);
+    fs.writeFileSync(file, lines.slice(0, 2).join('') + lines[2].slice(0, 20));
+    expect(cache.get(file).entries.map((e) => e.text)).toEqual([
+      '/model',
+      '로봇 모양 말고 클로드로 가자',
+    ]);
+    fs.writeFileSync(file, lines.join(''));
+    expect(cache.get(file)).toEqual(parseConversation(lines.join(''), 100));
+  });
+
+  it('starts over when the transcript shrinks', () => {
+    const file = path.join(dir, 's.jsonl');
+    const cache = new ConversationCache(100);
+    fs.writeFileSync(file, jsonl(RECORDS));
+    expect(cache.get(file).entries).toHaveLength(4);
+    const short = JSON.stringify({ type: 'user', message: { content: '새로' } }) + '\n';
+    fs.writeFileSync(file, short);
+    expect(cache.get(file)).toEqual({
+      title: null,
+      entries: [{ kind: 'user', text: '새로', timestamp: undefined }],
+    });
   });
 });
 
