@@ -20,6 +20,8 @@ export interface ConversationEntry {
 export interface ConversationView {
   title: string | null;
   entries: ConversationEntry[];
+  /** The model the newest main-chain reply came from, so a resume can keep it. */
+  model: string | null;
 }
 
 const MAX_ENTRY_CHARS = 4000;
@@ -55,7 +57,7 @@ interface TranscriptRecord {
   cwd?: string;
   aiTitle?: string;
   customTitle?: string;
-  message?: { content?: string | ContentBlock[] };
+  message?: { content?: string | ContentBlock[]; model?: string };
   /** Structured tool output; for a question, the answers keyed by question text. */
   toolUseResult?: unknown;
   /** A message typed while the agent was busy lands as a queued_command attachment. */
@@ -159,10 +161,11 @@ interface ParseState {
   customTitle: string | null;
   entries: ConversationEntry[];
   questionIds: Set<string>;
+  model: string | null;
 }
 
 function newParseState(): ParseState {
-  return { aiTitle: null, customTitle: null, entries: [], questionIds: new Set() };
+  return { aiTitle: null, customTitle: null, entries: [], questionIds: new Set(), model: null };
 }
 
 function parseLines(state: ParseState, jsonl: string, maxEntries: number): void {
@@ -176,6 +179,9 @@ function parseLines(state: ParseState, jsonl: string, maxEntries: number): void 
       continue; // a partially written last line
     }
     if (rec.type === 'ai-title' && rec.aiTitle) state.aiTitle = rec.aiTitle;
+    // Synthetic records (API errors, interrupts) name '<synthetic>', not a model.
+    const model = rec.type === 'assistant' && !rec.isSidechain ? rec.message?.model : undefined;
+    if (model && !model.startsWith('<')) state.model = model;
     if (rec.type === 'custom-title' && rec.customTitle) state.customTitle = rec.customTitle;
     if (rec.isSidechain || rec.isMeta) continue;
     const content = rec.message?.content;
@@ -263,7 +269,11 @@ function parseLines(state: ParseState, jsonl: string, maxEntries: number): void 
 }
 
 function viewOf(state: ParseState): ConversationView {
-  return { title: state.customTitle ?? state.aiTitle, entries: [...state.entries] };
+  return {
+    title: state.customTitle ?? state.aiTitle,
+    entries: [...state.entries],
+    model: state.model,
+  };
 }
 
 export function parseConversation(jsonl: string, maxEntries: number): ConversationView {

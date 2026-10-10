@@ -65,6 +65,8 @@ export interface SessionSettings {
 export interface SessionCatalog {
   commands: Array<{ name: string; description: string; argumentHint: string }>;
   models: Array<{ value: string; displayName: string; description: string }>;
+  /** The models[] value a new session would run with no model chosen; null if unmatched. */
+  defaultModel: string | null;
 }
 
 /** What the running turn has done so far, for the chat's "작업 중… (1분 2초 · ↓ 3.5k)" line. */
@@ -224,8 +226,10 @@ export class ManagedSessions {
   private liveCache: { at: number; ids: Set<string> } | null = null;
   /** Mode/model chosen for a session before the dashboard holds it; applied when it opens. */
   private readonly preferred = new Map<string, SessionSettings>();
-  /** What the CLI binary on disk reported, tagged with that binary so an update re-probes. */
-  private catalogCache: { stamp: string; catalog: SessionCatalog } | null = null;
+  /** What the CLI binary on disk reported, tagged with that binary and the user settings
+   *  file so an update or a changed default model re-probes. */
+  private catalogCache: { stamp: string; catalog: SessionCatalog; infos: ModelInfo[] } | null =
+    null;
 
   constructor(
     private readonly cwd: string,
@@ -268,19 +272,35 @@ export class ManagedSessions {
     return session && !session.busy ? session.suggestion : null;
   }
 
-  settingsFor(sessionId: string): SessionSettings {
+  /** A session nobody chose a model for keeps the one its transcript last ran on
+   *  (`transcriptModel`), so a default changed elsewhere never reaches it on resume. */
+  settingsFor(sessionId: string, transcriptModel: string | null = null): SessionSettings {
     return (
       this.sessions.get(sessionId)?.settings ??
-      this.preferred.get(sessionId) ?? { mode: DEFAULT_DASHBOARD_MODE, model: null }
+      this.preferred.get(sessionId) ?? {
+        mode: DEFAULT_DASHBOARD_MODE,
+        model: transcriptModel ? this.aliasFor(transcriptModel) : null,
+      }
     );
+  }
+
+  /** The catalog value ('opus') for a wire id ('claude-opus-5-5[1m]'): the alias keeps the
+   *  context window the CLI gives that model, which the bare id may not. */
+  private aliasFor(model: string): string {
+    const wire = model.replace(/\[[^\]]*\]$/, '');
+    const row = this.catalogCache?.infos.find(
+      (m) => m.value !== 'default' && m.resolvedModel === wire,
+    );
+    return row?.value ?? model;
   }
 
   /** Change mode and/or model; a live session switches now, any other one when it opens. */
   async updateSettings(
     sessionId: string,
     change: Partial<SessionSettings>,
+    transcriptModel: string | null,
   ): Promise<SessionSettings> {
-    const next = { ...this.settingsFor(sessionId), ...change };
+    const next = { ...this.settingsFor(sessionId, transcriptModel), ...change };
     const session = this.sessions.get(sessionId);
     if (session) {
       if (change.mode !== undefined) await session.query.setPermissionMode(change.mode);
@@ -296,11 +316,21 @@ export class ManagedSessions {
   /** Slash commands and models the CLI offers. Without a live session, a short-lived CLI
    *  that is never sent a prompt answers instead (no turn, no tokens). */
   async catalog(sessionId: string): Promise<SessionCatalog> {
-    const stamp = this.exeStamp();
+    const catalog = await this.probedCatalog();
+    const session = this.sessions.get(sessionId) ?? [...this.sessions.values()][0];
+    if (!session) return catalog;
+    // A live session knows its own commands (project skills, plugins). Its models are not
+    // asked: a session started before a CLI update still reports the old release's list.
+    return { ...catalog, commands: toCommandList(await session.query.supportedCommands()) };
+  }
+
+  private async probedCatalog(): Promise<SessionCatalog> {
+    const stamp = this.catalogStamp();
     if (this.catalogCache?.stamp !== stamp) {
-      const [commands, models] = await this.probeCatalog();
+      const [commands, models, defaultWire] = await this.probeCatalog();
       this.catalogCache = {
         stamp,
+        infos: models,
         catalog: {
           commands: toCommandList(commands),
           models: models.map((m: ModelInfo) => ({
@@ -308,27 +338,27 @@ export class ManagedSessions {
             displayName: m.displayName,
             description: m.description,
           })),
+          defaultModel: null,
         },
       };
+      const alias = this.aliasFor(defaultWire);
+      this.catalogCache.catalog.defaultModel = models.some((m) => m.value === alias) ? alias : null;
     }
-    const { catalog } = this.catalogCache;
-    const session = this.sessions.get(sessionId) ?? [...this.sessions.values()][0];
-    if (!session) return catalog;
-    // A live session knows its own commands (project skills, plugins). Its models are not
-    // asked: a session started before a CLI update still reports the old release's list.
-    return {
-      commands: toCommandList(await session.query.supportedCommands()),
-      models: catalog.models,
-    };
+    return this.catalogCache.catalog;
   }
 
-  /** Changes when Claude Code updates itself, which replaces the executable in place. */
-  private exeStamp(): string {
-    const st = fs.statSync(this.claudeExe);
-    return `${st.mtimeMs}:${st.size}`;
+  /** Changes when Claude Code updates itself, which replaces the executable in place, and
+   *  when the user settings file (where `/model` saves the default) is written. */
+  private catalogStamp(): string {
+    const exe = fs.statSync(this.claudeExe);
+    const configDir = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
+    const settings = fs.statSync(path.join(configDir, 'settings.json'), {
+      throwIfNoEntry: false,
+    });
+    return `${exe.mtimeMs}:${exe.size}:${settings?.mtimeMs ?? 'none'}`;
   }
 
-  private async probeCatalog(): Promise<[SlashCommand[], ModelInfo[]]> {
+  private async probeCatalog(): Promise<[SlashCommand[], ModelInfo[], string]> {
     const { query } = await import('@anthropic-ai/claude-agent-sdk');
     let release: (() => void) | null = null;
     const idle = new Promise<void>((r) => (release = r));
@@ -342,7 +372,13 @@ export class ManagedSessions {
       options: { pathToClaudeCodeExecutable: this.claudeExe, cwd: this.cwd },
     });
     try {
-      return await Promise.all([q.supportedCommands(), q.supportedModels()]);
+      // The probe starts like any new session, so the model it reports is the default.
+      const [commands, models, usage] = await Promise.all([
+        q.supportedCommands(),
+        q.supportedModels(),
+        q.getContextUsage(),
+      ]);
+      return [commands, models, usage.model];
     } finally {
       (release as (() => void) | null)?.();
       q.close();
@@ -440,8 +476,13 @@ export class ManagedSessions {
     return JSON.parse(stdout) as LiveSession[];
   }
 
-  /** Send a turn to a session, resuming it under the dashboard if nothing else holds it. */
-  async send(sessionId: string, content: TurnContent): Promise<void> {
+  /** Send a turn to a session, resuming it under the dashboard if nothing else holds it.
+   *  `transcriptModel` is the model its transcript last ran on (see settingsFor). */
+  async send(
+    sessionId: string,
+    content: TurnContent,
+    transcriptModel: string | null,
+  ): Promise<void> {
     const managed = this.sessions.get(sessionId);
     if (managed) {
       // A message sent mid-turn joins the running turn; keep its clock and token count.
@@ -454,7 +495,9 @@ export class ManagedSessions {
     if ((await this.liveTerminalSessions()).has(sessionId)) {
       throw new DashboardSessionError('session is open in a terminal', 409);
     }
-    await this.open({ resume: sessionId }, content, this.settingsFor(sessionId));
+    // aliasFor needs the model list; without it a bare id could resume on a smaller window.
+    if (transcriptModel) await this.probedCatalog();
+    await this.open({ resume: sessionId }, content, this.settingsFor(sessionId, transcriptModel));
   }
 
   /** Start a brand-new session with a first message. Resolves with its session id. */
@@ -600,7 +643,10 @@ export class ManagedSessions {
                 busy: true,
                 turn: firstTurn,
                 suggestion: null,
-                settings,
+                // "Default" means the default at launch; from here the chat names the model.
+                settings: settings.model
+                  ? settings
+                  : { ...settings, model: this.aliasFor(m.model) },
                 push: (t) => push(t),
                 close,
                 query: q,

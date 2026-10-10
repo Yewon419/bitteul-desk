@@ -79,7 +79,11 @@ const DEFAULT_PLACEHOLDER = input.placeholder;
 
 /** Settings for a session not created yet; sent along with its first message. */
 let draftSettings: { mode: DashboardMode; model: string | null } = { mode: 'auto', model: null };
-let catalog: { commands: CatalogCommand[]; models: CatalogModel[] } = { commands: [], models: [] };
+let catalog: { commands: CatalogCommand[]; models: CatalogModel[]; defaultModel: string | null } = {
+  commands: [],
+  models: [],
+  defaultModel: null,
+};
 /** The numbered picker on screen (/model, /mode, /help), so number keys can choose from it. */
 let activePicker: ((index: number) => void) | null = null;
 let suggestIndex = 0;
@@ -728,7 +732,12 @@ function currentSettings(): { mode: DashboardMode; model: string | null } {
 }
 
 function modelName(value: string | null): string {
-  if (!value) return '기본 모델';
+  if (!value) {
+    // The default is whatever ~/.claude/settings.json says right now; name it so a default
+    // changed in some other session doesn't go unnoticed here.
+    const current = catalog.defaultModel ? modelName(catalog.defaultModel) : null;
+    return current ? `기본 모델 (지금: ${current})` : '기본 모델';
+  }
   return catalog.models.find((m) => m.value === value)?.displayName ?? value;
 }
 
@@ -748,7 +757,7 @@ function renderControls(): void {
   if (document.activeElement !== modeSelect) modeSelect.value = mode;
   const values = ['', ...catalog.models.map((m) => m.value)];
   if (model && !values.includes(model)) values.push(model);
-  const signature = values.join('|');
+  const signature = `${values.join('|')}:${catalog.defaultModel ?? ''}`;
   if (modelSelect.dataset.signature !== signature) {
     modelSelect.dataset.signature = signature;
     modelSelect.replaceChildren(...values.map((v) => new Option(modelName(v || null), v)));
@@ -878,7 +887,10 @@ function runLocalCommand(text: string): boolean {
     void applySettings({ model: resolveModel(command.arg, catalog.models) });
     return true;
   }
-  const choices = [{ value: null, displayName: '기본 모델', description: '' }, ...catalog.models];
+  const choices = [
+    { value: null, displayName: modelName(null), description: '' },
+    ...catalog.models,
+  ];
   showPicker(
     catalog.models.length ? '모델' : '모델 (목록은 세션이 한 번 켜진 뒤에 보여요)',
     choices.map((m) => ({

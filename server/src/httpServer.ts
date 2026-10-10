@@ -276,8 +276,9 @@ function registerDashboardRoutes(
     const agents = [];
     for (const agent of options.store.values()) {
       let title: string | null = null;
+      let transcriptModel: string | null = null;
       try {
-        title = conversations.get(agent.jsonlFile).title;
+        ({ title, model: transcriptModel } = conversations.get(agent.jsonlFile));
       } catch (err) {
         app.log.warn(
           { err, id: agent.id, file: agent.jsonlFile },
@@ -292,7 +293,7 @@ function registerDashboardRoutes(
         owner: managed && liveKnown ? managed.owner(sessionId, live) : 'terminal',
         busy: managed?.isBusy(sessionId) ?? false,
         pending: managed?.pendingFor(sessionId) ?? [],
-        settings: managed?.settingsFor(sessionId) ?? null,
+        settings: managed?.settingsFor(sessionId, transcriptModel) ?? null,
         activity: managed?.activity(sessionId) ?? null,
         suggestion: managed?.suggestionFor(sessionId) ?? null,
         // Terminal sessions only show up through their transcript: what tools are running now.
@@ -374,7 +375,9 @@ function registerDashboardRoutes(
       if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
       const agent = options.store.get(Number(request.params.id));
       if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
-      return sendOrFail(reply, () => managed.send(sessionOf(agent), content));
+      return sendOrFail(reply, () =>
+        managed.send(sessionOf(agent), content, conversations.get(agent.jsonlFile).model),
+      );
     },
   );
 
@@ -485,7 +488,13 @@ function registerDashboardRoutes(
       if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
       const agent = options.store.get(Number(request.params.id));
       if (!agent) return reply.code(404).send({ error: `no agent ${request.params.id}` });
-      return sendOrFail(reply, () => managed.updateSettings(sessionOf(agent), request.body));
+      return sendOrFail(reply, () =>
+        managed.updateSettings(
+          sessionOf(agent),
+          request.body,
+          conversations.get(agent.jsonlFile).model,
+        ),
+      );
     },
   );
 

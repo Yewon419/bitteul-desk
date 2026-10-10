@@ -54,6 +54,22 @@ describe('parseConversation', () => {
     ]);
   });
 
+  it('remembers the model of the newest main-chain reply, skipping synthetic and sub-agent ones', () => {
+    const reply = (model: string, extra: object = {}): object => ({
+      type: 'assistant',
+      message: { model, content: [{ type: 'text', text: 'hi' }] },
+      ...extra,
+    });
+    const records = [
+      reply('claude-fable-5-1'),
+      reply('claude-opus-5-5'),
+      reply('claude-haiku-5-5', { isSidechain: true }),
+      reply('<synthetic>'),
+    ];
+    expect(parseConversation(jsonl(records), 100).model).toBe('claude-opus-5-5');
+    expect(parseConversation(jsonl(RECORDS), 100).model).toBeNull();
+  });
+
   it('prefers a custom title and caps the entry count from the end', () => {
     const records = [...RECORDS, { type: 'custom-title', customTitle: '내 제목' }];
     const view = parseConversation(jsonl(records), 2);
@@ -190,6 +206,7 @@ describe('ConversationCache', () => {
     expect(cache.get(file)).toEqual({
       title: null,
       entries: [{ kind: 'user', text: '새로', timestamp: undefined }],
+      model: null,
     });
   });
 });
