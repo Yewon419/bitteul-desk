@@ -64,6 +64,7 @@
       html, body { margin: 0; }
       body { min-height: 100vh; overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; align-items: center; }
       .sign-input { position: absolute; z-index: 11; box-sizing: border-box; font-family: 'Galmuri11', sans-serif; font-size: 16px; font-weight: bold; text-align: center; color: #13293d; background: #ffffff; border: 3px solid #ffd166; outline: none; }
+      #scene { position: sticky; }
       canvas { image-rendering: pixelated; display: block; touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
     </style>
   </head>
@@ -73,7 +74,7 @@
       <button id="pair" class="tool-btn" type="button" hidden>폰 연결</button>
       <button id="scope" class="tool-btn" type="button" hidden title="다른 폴더에서 연 Claude Code 세션도 사무실에 불러올지 정해요">이 폴더만 보는 중</button>
     </div>
-    <canvas id="scene"></canvas>
+    <div id="stage"><canvas id="scene"></canvas></div>
     <div id="toast" role="status" hidden></div>
     <button id="desk-hire" class="tool-btn" type="button" hidden>+ 직원 추가</button>
     <div id="board-modal" role="dialog" aria-modal="true" aria-labelledby="board-heading" hidden>

@@ -778,24 +778,41 @@ async function start(): Promise<void> {
   let sceneH = roomH;
 
   const toolbar = document.getElementById('toolbar');
+  const stage = document.getElementById('stage');
+  if (!stage) throw new Error('[Scene] #stage missing');
 
+  // The stage takes the whole office's size so the page scrolls through it; the canvas is only
+  // as tall as the window and sticks under the toolbar. A canvas the size of the whole office
+  // passes iOS's canvas area limit once there are a few floors, and iOS then draws nothing.
   function fit(): void {
-    if (!canvas) return;
+    if (!canvas || !stage) return;
     const compact = window.innerWidth < COMPACT_MAX_WIDTH_PX;
     cols = compact ? 1 : layout.rooms;
     sceneW = roomW * cols;
     sceneH = roomH * ((floors * layout.rooms) / cols);
     // The toolbar sits above the canvas in the page flow, so a room has to fit below it.
-    const roomSpace = window.innerHeight - (toolbar?.offsetHeight ?? 0);
+    const toolbarH = toolbar?.offsetHeight ?? 0;
+    const roomSpace = window.innerHeight - toolbarH;
     const scale = compact
       ? window.innerWidth / sceneW
       : Math.min(window.innerWidth / sceneW, roomSpace / roomH);
     const factor = Math.max(1, Math.round(scale * window.devicePixelRatio));
+    const viewH = Math.min(sceneH, Math.ceil(roomSpace / scale));
+    stage.style.width = `${Math.floor(sceneW * scale)}px`;
+    stage.style.height = `${Math.floor(sceneH * scale)}px`;
     canvas.width = sceneW * factor;
-    canvas.height = sceneH * factor;
+    canvas.height = viewH * factor;
+    canvas.style.top = `${toolbarH}px`;
     canvas.style.width = `${Math.floor(sceneW * scale)}px`;
-    canvas.style.height = `${Math.floor(sceneH * scale)}px`;
+    canvas.style.height = `${Math.floor(viewH * scale)}px`;
   }
+
+  /** How far down the office, in scene units, the canvas's top edge currently is. */
+  const viewTop = (): number => {
+    const stageRect = stage.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    return ((canvasRect.top - stageRect.top) / stageRect.height) * sceneH;
+  };
   fit();
   window.addEventListener('resize', fit);
   // The toolbar starts hidden and appears once the server answers, taking height from the room.
@@ -989,7 +1006,7 @@ async function start(): Promise<void> {
   });
 
   const toScene = (ev: { clientX: number; clientY: number }): [number, number] => {
-    const rect = canvas.getBoundingClientRect();
+    const rect = stage.getBoundingClientRect();
     return [
       ((ev.clientX - rect.left) / rect.width) * sceneW,
       ((ev.clientY - rect.top) / rect.height) * sceneH,
@@ -1004,7 +1021,7 @@ async function start(): Promise<void> {
   const canHire = (): boolean => !!token && !!hire && !hire.hidden;
   const showDeskHire = (desk: HitBox): void => {
     if (!deskHire || !canHire()) return;
-    const rect = canvas.getBoundingClientRect();
+    const rect = stage.getBoundingClientRect();
     const sx = rect.width / sceneW;
     const sy = rect.height / sceneH;
     deskHire.style.left = `${window.scrollX + rect.left + ((desk.x0 + desk.x1) / 2) * sx}px`;
@@ -1034,7 +1051,7 @@ async function start(): Promise<void> {
 
   const editSign = (zone: HitBox): void => {
     if (!token) return;
-    const rect = canvas.getBoundingClientRect();
+    const rect = stage.getBoundingClientRect();
     const sx = rect.width / sceneW;
     const sy = rect.height / sceneH;
     const input = document.createElement('input');
@@ -1192,6 +1209,7 @@ async function start(): Promise<void> {
       fit();
     }
     const factor = canvas.width / sceneW;
+    const viewY = viewTop();
     const working = ordered.filter((a) => moodOf(a) !== 'resting').length;
     const bubbles: Array<[number, number, string, boolean, boolean]> = [];
     const chatOpenFor = (id: number): boolean => {
@@ -1226,7 +1244,7 @@ async function start(): Promise<void> {
         offsetX = (globalRoom % cols) * roomW;
         offsetY = Math.floor(globalRoom / cols) * roomH;
         const roomT = t + globalRoom * ROOM_TIME_SHIFT_MS;
-        ctx.setTransform(factor, 0, 0, factor, offsetX * factor, offsetY * factor);
+        ctx.setTransform(factor, 0, 0, factor, offsetX * factor, (offsetY - viewY) * factor);
         ctx.drawImage(bg, 0, 0);
         ambient.drawBack(ctx, roomT);
         const walkers: Array<[Agent, Body]> = [];
@@ -1307,7 +1325,7 @@ async function start(): Promise<void> {
       }
     }
 
-    ctx.setTransform(factor, 0, 0, factor, 0, 0);
+    ctx.setTransform(factor, 0, 0, factor, 0, -viewY * factor);
     if (drag) {
       const target = inside(zones, drag.x, drag.y);
       if (target) drawDropTarget(ctx, target);
