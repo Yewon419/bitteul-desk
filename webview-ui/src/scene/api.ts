@@ -79,15 +79,36 @@ export async function fetchJson<T>(path: string, token: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-export async function postJson<T>(path: string, token: string, body: object): Promise<T> {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`POST ${path} -> ${res.status} ${text}`);
-  return (text ? JSON.parse(text) : {}) as T;
+/** `timeoutMs`: give up instead of waiting forever on a connection that stalled silently. */
+export async function postJson<T>(
+  path: string,
+  token: string,
+  body: object,
+  timeoutMs?: number,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer =
+    timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`POST ${path} -> ${res.status} ${text}`);
+    return (text ? JSON.parse(text) : {}) as T;
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`POST ${path}: ${Math.round((timeoutMs ?? 0) / 1000)}초 안에 응답 없음`, {
+        cause: err,
+      });
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** `seat`: for a new hire, the empty desk they were hired from. */

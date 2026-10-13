@@ -597,9 +597,12 @@ async function pollConversation(): Promise<void> {
   const last = data.entries[data.entries.length - 1];
   const versions = data.entries.flatMap((e) => (e.media ?? []).map((m) => m.version));
   const signature = `${data.entries.length}:${last?.text.length ?? 0}:${versions.join(',')}`;
+  if (searchQuery) applySearch(true);
   if (signature === lastSignature) return;
+  else toBottomBtn.dataset.new = '1';
+  updateToBottom();
   lastSignature = signature;
-  const nearBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < STICK_TO_BOTTOM_PX;
+  const nearBottom = isNearBottom();
   logEl.replaceChildren(...renderLog(data.entries));
   if (nearBottom) logEl.scrollTop = logEl.scrollHeight;
 }
@@ -631,7 +634,13 @@ async function send(): Promise<void> {
       window.history.replaceState(null, '', `?${next.toString()}`);
       setTitle('새 직원 출근 중…');
     } else if (meta) {
-      await postJson(`./api/dashboard/agents/${meta.id}/messages`, token, { text, attachments });
+      // No retry: the server may have taken the turn even when the answer never arrived.
+      await postJson(
+        `./api/dashboard/agents/${meta.id}/messages`,
+        token,
+        { text, attachments },
+        MESSAGE_TIMEOUT_MS,
+      );
     }
     input.value = '';
     pendingFiles = [];
@@ -1065,14 +1074,23 @@ function namedFile(file: File): File {
   return new File([file], `붙여넣은-이미지-${stamp}.${ext}`, { type: file.type });
 }
 
-function addFiles(files: Iterable<File>): void {
-  for (const raw of files) {
-    const file = namedFile(raw);
-    if (file.size > MAX_FILE_BYTES) {
-      errorEl.textContent = `${file.name}: 25MB보다 큰 파일은 첨부할 수 없어요.`;
+/**
+ * Copy the bytes now: iOS hands over a temporary copy of a photo that can vanish once the
+ * page is backgrounded, and a later fetch on it fails with "TypeError: Load failed".
+ */
+async function addFiles(files: Iterable<File>): Promise<void> {
+  for (const raw of Array.from(files)) {
+    const named = namedFile(raw);
+    if (named.size > MAX_FILE_BYTES) {
+      errorEl.textContent = `${named.name}: 25MB보다 큰 파일은 첨부할 수 없어요.`;
       continue;
     }
-    pendingFiles.push(file);
+    try {
+      const bytes = await named.arrayBuffer();
+      pendingFiles.push(new File([bytes], named.name, { type: named.type }));
+    } catch (err) {
+      errorEl.textContent = `${named.name}: 파일을 읽지 못했어요. 다시 골라 주세요. (${String(err)})`;
+    }
   }
   renderAttachments();
 }
@@ -1098,35 +1116,70 @@ function renderAttachments(): void {
   );
 }
 
+const MESSAGE_TIMEOUT_MS = 30_000;
+const UPLOAD_ATTEMPTS = 3;
+const UPLOAD_BASE_TIMEOUT_MS = 30_000;
+const UPLOAD_MS_PER_MB = 10_000;
+const UPLOAD_RETRY_DELAY_MS = 1_500;
+
+/**
+ * One file, retried when the phone's connection drops or stalls mid-upload (network switch,
+ * VPN reconnect). Without a timeout a stalled request never settles and the send spins forever.
+ */
+async function uploadOne(file: File): Promise<Uploaded> {
+  const params = new URLSearchParams({
+    name: file.name,
+    mime: file.type || 'application/octet-stream',
+  });
+  const timeoutMs = UPLOAD_BASE_TIMEOUT_MS + (file.size / 1024 / 1024) * UPLOAD_MS_PER_MB;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`./api/dashboard/uploads?${params.toString()}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' },
+        body: file,
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`${file.name} 올리기 실패: ${res.status} ${await res.text()}`);
+      return (await res.json()) as Uploaded;
+    } catch (err) {
+      // A server answer (4xx/5xx) will not change on retry; only network failures are retried.
+      if (!(err instanceof TypeError) && !controller.signal.aborted) throw err;
+      lastError = controller.signal.aborted
+        ? new Error(`${Math.round(timeoutMs / 1000)}초 안에 응답 없음`)
+        : err;
+      if (attempt < UPLOAD_ATTEMPTS) {
+        errorEl.textContent = `${file.name} 다시 올리는 중… (${attempt + 1}/${UPLOAD_ATTEMPTS})`;
+        await new Promise((resolve) => window.setTimeout(resolve, UPLOAD_RETRY_DELAY_MS));
+      }
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+  throw new Error(`${file.name} 올리기 실패 (${UPLOAD_ATTEMPTS}번 시도): ${String(lastError)}`);
+}
+
 /** Send the files first; the message then refers to where the server saved them. */
 async function uploadPending(): Promise<Uploaded[]> {
   const uploaded: Uploaded[] = [];
-  for (const file of pendingFiles) {
-    const params = new URLSearchParams({
-      name: file.name,
-      mime: file.type || 'application/octet-stream',
-    });
-    const res = await fetch(`./api/dashboard/uploads?${params.toString()}`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' },
-      body: file,
-    });
-    if (!res.ok) throw new Error(`${file.name} 올리기 실패: ${res.status} ${await res.text()}`);
-    uploaded.push((await res.json()) as Uploaded);
-  }
+  for (const file of pendingFiles) uploaded.push(await uploadOne(file));
   return uploaded;
 }
 
 attachBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
-  if (fileInput.files) addFiles(fileInput.files);
+  const files = fileInput.files ? Array.from(fileInput.files) : [];
   fileInput.value = '';
+  void addFiles(files);
 });
 input.addEventListener('paste', (ev) => {
   const files = ev.clipboardData?.files;
   if (!files || files.length === 0) return;
   ev.preventDefault();
-  addFiles(files);
+  void addFiles(Array.from(files));
 });
 let dragDepth = 0;
 document.addEventListener('dragenter', (ev) => {
@@ -1150,7 +1203,7 @@ document.addEventListener('drop', (ev) => {
     errorEl.textContent = '이 세션에는 지금 첨부를 보낼 수 없어요.';
     return;
   }
-  addFiles(ev.dataTransfer.files);
+  void addFiles(Array.from(ev.dataTransfer.files));
 });
 
 /** Stop the running turn, like Esc in the terminal. */
@@ -1168,10 +1221,154 @@ async function interrupt(): Promise<void> {
 }
 stopBtn.addEventListener('click', () => void interrupt());
 
+// ── Jump to the latest message ──
+
+const toBottomBtn = byId<HTMLButtonElement>('to-bottom');
+
+function isNearBottom(): boolean {
+  return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < STICK_TO_BOTTOM_PX;
+}
+
+/** Shown while scrolled up; says "새 메시지" when something arrived out of view. */
+function updateToBottom(): void {
+  const away = !isNearBottom();
+  toBottomBtn.hidden = !away;
+  if (!away) delete toBottomBtn.dataset.new;
+  toBottomBtn.textContent = toBottomBtn.dataset.new ? '↓ 새 메시지' : '↓ 맨 아래로';
+}
+
+logEl.addEventListener('scroll', updateToBottom, { passive: true });
+// Instant, not smooth: logs run to tens of thousands of pixels, and a long smooth scroll
+// stalls when the window is in the background.
+toBottomBtn.addEventListener('click', () => {
+  logEl.scrollTop = logEl.scrollHeight;
+  updateToBottom();
+});
+
+// ── Find in the conversation ──
+
+const searchBar = byId<HTMLDivElement>('search');
+const searchInput = byId<HTMLInputElement>('search-input');
+const searchCount = byId<HTMLSpanElement>('search-count');
+let searchQuery = '';
+let hits: HTMLElement[] = [];
+let hitIndex = -1;
+
+function clearHits(): void {
+  logEl.querySelectorAll('mark.hit').forEach((mark) => {
+    const parent = mark.parentNode;
+    mark.replaceWith(mark.textContent ?? '');
+    parent?.normalize();
+  });
+  hits = [];
+}
+
+/** Wraps every case-insensitive occurrence in the log's text in a <mark>, in reading order. */
+function markMatches(query: string): HTMLElement[] {
+  const needle = query.toLowerCase();
+  const walker = document.createTreeWalker(logEl, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+  const found: HTMLElement[] = [];
+  for (const node of nodes) {
+    const text = node.data;
+    const lower = text.toLowerCase();
+    let at = lower.indexOf(needle);
+    if (at < 0) continue;
+    const frag = document.createDocumentFragment();
+    let from = 0;
+    while (at >= 0) {
+      frag.append(text.slice(from, at));
+      const mark = el('mark', 'hit', text.slice(at, at + needle.length));
+      found.push(mark);
+      frag.append(mark);
+      from = at + needle.length;
+      at = lower.indexOf(needle, from);
+    }
+    frag.append(text.slice(from));
+    node.replaceWith(frag);
+  }
+  return found;
+}
+
+function showHit(scroll: boolean): void {
+  hits.forEach((h, i) => h.classList.toggle('hit-current', i === hitIndex));
+  searchCount.textContent = !searchQuery
+    ? ''
+    : hits.length
+      ? `${hitIndex + 1}/${hits.length}`
+      : '없음';
+  const current = hits[hitIndex];
+  if (!current || !scroll) return;
+  const fold = current.closest('details');
+  if (fold && !fold.open) fold.open = true;
+  current.scrollIntoView({ block: 'center' });
+}
+
+/** Marks the log for the current query. A fresh search starts at the newest match; after a
+ *  poll re-render (`keepPlace`) the same match number stays selected and the view stays put. */
+function applySearch(keepPlace: boolean): void {
+  clearHits();
+  hits = searchQuery ? markMatches(searchQuery) : [];
+  if (!keepPlace || hitIndex < 0) hitIndex = hits.length - 1;
+  else hitIndex = Math.min(hitIndex, hits.length - 1);
+  showHit(!keepPlace);
+}
+
+/** -1 goes up to older matches, +1 down to newer ones, wrapping around. */
+function stepHit(delta: number): void {
+  if (hits.length === 0) return;
+  hitIndex = (hitIndex + delta + hits.length) % hits.length;
+  showHit(true);
+}
+
+function openSearch(): void {
+  searchBar.hidden = false;
+  searchInput.focus();
+  searchInput.select();
+}
+
+function closeSearch(): void {
+  searchBar.hidden = true;
+  searchQuery = '';
+  clearHits();
+  hitIndex = -1;
+  searchCount.textContent = '';
+}
+
+searchInput.addEventListener('input', () => {
+  searchQuery = searchInput.value.trim();
+  applySearch(false);
+});
+searchInput.addEventListener('keydown', (ev) => {
+  if (ev.isComposing) return;
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    stepHit(ev.shiftKey ? 1 : -1);
+  } else if (ev.key === 'Escape') {
+    // Handled here so Esc never reaches the document handler, which would stop the agent.
+    ev.preventDefault();
+    ev.stopPropagation();
+    closeSearch();
+  }
+});
+byId<HTMLButtonElement>('search-open').addEventListener('click', () =>
+  searchBar.hidden ? openSearch() : closeSearch(),
+);
+byId<HTMLButtonElement>('search-prev').addEventListener('click', () => stepHit(-1));
+byId<HTMLButtonElement>('search-next').addEventListener('click', () => stepHit(1));
+byId<HTMLButtonElement>('search-close').addEventListener('click', closeSearch);
+
 document.addEventListener('keydown', (ev) => {
   if (ev.isComposing) return;
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f') {
+    ev.preventDefault();
+    openSearch();
+    return;
+  }
   if (ev.key === 'Escape') {
-    if (!suggestEl.hidden) hideSuggest();
+    if (!searchBar.hidden) closeSearch();
+    else if (!suggestEl.hidden) hideSuggest();
     else if (activePicker) closePicker();
     else void interrupt();
     return;
