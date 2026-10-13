@@ -163,8 +163,50 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 });
 
+const COPIED_RESET_MS = 1_500;
+
 function markdown(text: string): string {
   return DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }));
+}
+
+/** navigator.clipboard needs a secure page; the plain-http LAN link falls back to execCommand. */
+async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.append(area);
+  area.select();
+  const ok = document.execCommand('copy');
+  area.remove();
+  if (!ok) throw new Error('copy command refused');
+}
+
+function addCopyButtons(body: HTMLElement): void {
+  for (const pre of Array.from(body.querySelectorAll('pre'))) {
+    const wrap = el('div', 'code-wrap');
+    pre.replaceWith(wrap);
+    const btn = el('button', 'code-copy', '복사');
+    btn.type = 'button';
+    btn.addEventListener('click', () => {
+      copyText(pre.textContent ?? '').then(
+        () => {
+          btn.textContent = '복사됨';
+          window.setTimeout(() => (btn.textContent = '복사'), COPIED_RESET_MS);
+        },
+        (err: unknown) => {
+          btn.textContent = '실패';
+          errorEl.textContent = `복사하지 못했습니다: ${String(err)}`;
+        },
+      );
+    });
+    wrap.append(pre, btn);
+  }
 }
 
 function renderEntry(entry: ConversationEntry): HTMLElement {
@@ -178,8 +220,10 @@ function renderEntry(entry: ConversationEntry): HTMLElement {
   head.append(el('span', 'msg-who', entry.kind === 'user' ? userName : '직원'));
   if (time) head.append(el('span', 'msg-time', time));
   const body = el('div', 'msg-body');
-  if (entry.kind === 'assistant') body.innerHTML = markdown(entry.text);
-  else body.textContent = entry.text;
+  if (entry.kind === 'assistant') {
+    body.innerHTML = markdown(entry.text);
+    addCopyButtons(body);
+  } else body.textContent = entry.text;
   row.append(head, body);
   return row;
 }
