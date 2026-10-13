@@ -278,6 +278,66 @@ lowDataBox.addEventListener('change', () => {
   }
 });
 
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP_PX = 10;
+
+/**
+ * The share sheet is the only route to the photo library or Files on iOS for audio and video,
+ * and previews are blob: URLs that its own long-press menu does not reliably save.
+ * Without Web Share (plain-http LAN link) the file is downloaded instead.
+ */
+async function saveMedia(file: File, url: string): Promise<void> {
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file] });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      errorEl.textContent = `저장하지 못했습니다: ${String(err)}`;
+    }
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = file.name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+/** Fires on lift after a hold, so the share sheet opens inside a user gesture. */
+function onLongPress(target: HTMLElement, action: () => void): void {
+  let startedAt = 0;
+  let startX = 0;
+  let startY = 0;
+  target.addEventListener(
+    'touchstart',
+    (ev) => {
+      if (ev.touches.length !== 1) return;
+      startedAt = Date.now();
+      startX = ev.touches[0].clientX;
+      startY = ev.touches[0].clientY;
+    },
+    { passive: true },
+  );
+  target.addEventListener(
+    'touchmove',
+    (ev) => {
+      const t = ev.touches[0];
+      const moved = Math.hypot(t.clientX - startX, t.clientY - startY);
+      if (moved > LONG_PRESS_SLOP_PX) startedAt = 0;
+    },
+    { passive: true },
+  );
+  target.addEventListener('touchcancel', () => (startedAt = 0));
+  target.addEventListener('touchend', (ev) => {
+    const held = startedAt !== 0 && Date.now() - startedAt >= LONG_PRESS_MS;
+    startedAt = 0;
+    if (!held) return;
+    ev.preventDefault();
+    action();
+  });
+}
+
 async function loadMedia(m: MediaRef, key: string, holder: HTMLElement): Promise<void> {
   if (!meta) return;
   try {
@@ -286,7 +346,11 @@ async function loadMedia(m: MediaRef, key: string, holder: HTMLElement): Promise
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-    const url = URL.createObjectURL(await res.blob());
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const file = new File([blob], m.name, { type: blob.type });
+    const box = holder.closest('figure');
+    if (box) onLongPress(box, () => void saveMedia(file, url));
     const previous = mediaUrls.get(m.path);
     if (previous && previous.key !== key) {
       URL.revokeObjectURL(previous.url);
@@ -319,7 +383,8 @@ function mediaNode(m: MediaRef): HTMLElement {
   const cached = mediaNodes.get(key);
   if (cached) return cached;
   const box = el('figure', `media media-${m.kind}`);
-  const caption = el('figcaption', '', `${m.name} · ${formatSize(m.size)}`);
+  const hint = !m.tooLarge && window.matchMedia(TOUCH_MEDIA).matches ? ' · 꾹 눌러 저장' : '';
+  const caption = el('figcaption', '', `${m.name} · ${formatSize(m.size)}${hint}`);
   caption.title = m.path;
   box.append(caption);
   mediaNodes.set(key, box);
