@@ -475,6 +475,73 @@
         background: var(--bg);
         border-radius: 4px;
       }
+      .ask-plan {
+        border-left-color: var(--accent-strong);
+      }
+      .plan-body {
+        margin: 0 0 12px;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .plan-summary {
+        margin: 0 0 10px;
+        white-space: pre-wrap;
+      }
+      .plan-heading {
+        margin: 12px 0 6px;
+        font-size: 13px;
+        color: var(--dim);
+      }
+      .plan-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .plan-list li {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 10px;
+        padding: 8px 10px;
+        background: var(--bg);
+        border-radius: 4px;
+      }
+      .plan-list strong {
+        min-width: 72px;
+      }
+      .plan-perms em {
+        flex-basis: 100%;
+        font-style: normal;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .plan-none,
+      .plan-note {
+        margin: 8px 0 0;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .plan-feedback {
+        box-sizing: border-box;
+        width: 100%;
+        margin-top: 10px;
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 14px;
+        color: var(--text);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+      }
+      .ask-plan .plan-feedback[hidden],
+      .ask-plan .plan-send[hidden] {
+        display: none;
+      }
+      .plan-send {
+        margin-top: 8px;
+      }
       .ask-approval .btn {
         display: inline-flex;
         align-items: center;

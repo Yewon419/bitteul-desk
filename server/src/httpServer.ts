@@ -315,6 +315,7 @@ function registerDashboardRoutes(
         pending: managed?.pendingFor(sessionId) ?? [],
         settings: managed?.settingsFor(sessionId, transcriptModel) ?? null,
         activity: managed?.activity(sessionId) ?? null,
+        team: managed?.teamStatus(sessionId) ?? null,
         suggestion: managed?.suggestionFor(sessionId) ?? null,
         // Terminal sessions only show up through their transcript: what tools are running now.
         activeTools: agent.activeToolStatuses ? [...agent.activeToolStatuses.values()] : [],
@@ -501,14 +502,17 @@ function registerDashboardRoutes(
     },
   );
 
-  app.post<{ Params: { requestId: string }; Body: { allow: boolean } }>(
+  app.post<{ Params: { requestId: string }; Body: { allow: boolean; feedback?: string } }>(
     '/api/dashboard/permissions/:requestId',
     {
       ...auth,
       schema: {
         body: {
           type: 'object',
-          properties: { allow: { type: 'boolean' } },
+          properties: {
+            allow: { type: 'boolean' },
+            feedback: { type: 'string', maxLength: 4000 },
+          },
           required: ['allow'],
         },
       },
@@ -516,7 +520,7 @@ function registerDashboardRoutes(
     async (request, reply) => {
       if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
       return sendOrFail(reply, () => {
-        managed.answer(request.params.requestId, request.body.allow);
+        managed.answer(request.params.requestId, request.body.allow, request.body.feedback);
         return Promise.resolve();
       });
     },

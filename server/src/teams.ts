@@ -17,6 +17,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { LAYOUT_FILE_DIR } from './constants.js';
+import { PLAN_TOOL, PLAN_TOOL_NAME, type TeamPlan } from './teamPlan.js';
 
 const FILE_NAME = 'bitteul-teams.json';
 const TEMPLATES_FILE = 'bitteul-team-templates.json';
@@ -119,6 +120,7 @@ export function teamAgents(team: TeamRoster): Record<string, AgentDefinition> {
         description: `${m.label}: ${m.role}`,
         model: m.model,
         background: true,
+        disallowedTools: [PLAN_TOOL],
         prompt: [
           `You are ${m.key} (${m.label}) on a team led by the MD. Your role: ${m.role}`,
           `Your teammates: ${names}. The MD is "main".`,
@@ -137,14 +139,17 @@ export function leadInstructions(team: TeamRoster): string {
     `You are the ${team.leadLabel}, the lead of a team. The user gives you briefs; your team does the work.`,
     'Team members:',
     roster(team),
+    `Before you bring anyone in, call ${PLAN_TOOL_NAME} with the plan, who does what, and the permissions the work needs (folders to write in, commands to run, sites to open). Keep the permissions narrow: anything outside them still asks the user one request at a time. Wait for the approval; if the user sends feedback instead, revise and submit again.`,
     'Bring a member in with the Agent tool, setting both subagent_type and name to the member key above, with run_in_background true. Start each member at most once; after that reach them with SendMessage (to: the key), which also wakes a member that has finished.',
-    'Before you bring anyone in, tell the user in a few lines who will do what. Then coordinate: hand out work, unblock members, and let them talk to each other directly.',
+    'Once the plan is approved, coordinate: hand out work, unblock members, and let them talk to each other directly. If the work turns out to need more than the approved permissions, submit a revised plan.',
     "Do not do a member's work yourself. When the work is finished, check it against the brief and give the user the final result and where it is.",
   ].join('\n');
 }
 
 interface TeamsFile {
   sessions: Record<string, TeamRoster>;
+  /** Approved plans, so a resumed team keeps what the user already allowed. */
+  plans: Record<string, TeamPlan>;
 }
 
 function filePath(name: string): string {
@@ -166,9 +171,9 @@ export class TeamRegistry {
   }
 
   private static read(file: string): TeamsFile {
-    if (!fs.existsSync(file)) return { sessions: {} };
+    if (!fs.existsSync(file)) return { sessions: {}, plans: {} };
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<TeamsFile>;
-    return { sessions: parsed.sessions ?? {} };
+    return { sessions: parsed.sessions ?? {}, plans: parsed.plans ?? {} };
   }
 
   rosterOf(sessionId: string): TeamRoster | undefined {
@@ -177,6 +182,15 @@ export class TeamRegistry {
 
   remember(sessionId: string, team: TeamRoster): void {
     this.data.sessions[sessionId] = team;
+    writeAtomic(this.file, this.data);
+  }
+
+  planOf(sessionId: string): TeamPlan | undefined {
+    return this.data.plans[sessionId];
+  }
+
+  rememberPlan(sessionId: string, plan: TeamPlan): void {
+    this.data.plans[sessionId] = plan;
     writeAtomic(this.file, this.data);
   }
 }

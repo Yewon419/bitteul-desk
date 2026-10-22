@@ -44,6 +44,26 @@ export interface PermissionAsk {
   questions?: Question[];
   /** Team sessions: the member asking ('개발자', or 'MD' when the lead asks). */
   member?: string;
+  /** Set when the MD submits its team plan for approval. */
+  plan?: TeamPlan;
+}
+
+export interface PlanPermission {
+  kind: 'files' | 'command' | 'web';
+  scope: string;
+  why: string;
+}
+
+export interface TeamPlan {
+  summary: string;
+  assignments: Array<{ member: string; task: string }>;
+  permissions: PlanPermission[];
+}
+
+export interface TeamStatus {
+  name: string;
+  plan: 'none' | 'waiting' | 'approved';
+  autoAllowed: number;
 }
 
 /** 'teammate': a team member's own window; work reaches it through the MD. */
@@ -69,6 +89,8 @@ export interface AgentMeta {
   suggestion: string | null;
   /** Tools a session is running right now, as read from its transcript. */
   activeTools: string[];
+  /** Set on a team's MD. */
+  team: TeamStatus | null;
 }
 
 export interface AgentsResponse {

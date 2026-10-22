@@ -16,10 +16,12 @@ import {
   fetchJson,
   type MediaRef,
   type PermissionAsk,
+  type PlanPermission,
   postJson,
   type Question,
   readTeamDraft,
   takeChatDraft,
+  type TeamPlan,
 } from '../scene/api.js';
 import {
   type CatalogCommand,
@@ -467,6 +469,15 @@ function setTitle(text: string): void {
   document.title = `${text} · 빛뜰 데스크`;
 }
 
+/** A team MD's plan state, for the status line. */
+function teamNote(m: AgentMeta): string {
+  if (!m.team) return '';
+  if (m.team.plan === 'approved') {
+    return `${m.team.name} · 계획 승인됨 · 범위 안 요청 ${m.team.autoAllowed}건 자동 허용`;
+  }
+  return m.team.plan === 'waiting' ? `${m.team.name} · 계획 승인 대기` : m.team.name;
+}
+
 function renderStatus(): void {
   let status: string;
   let note = '';
@@ -500,6 +511,10 @@ function renderStatus(): void {
     locked = true;
   } else if (meta.busy) {
     status = '작업 중';
+    note = teamNote(meta);
+  } else if (meta.team) {
+    status = '대기';
+    note = teamNote(meta);
   } else {
     status = meta.owner === 'dashboard' ? '대기' : '대기 (보내면 이어받음)';
   }
@@ -695,6 +710,73 @@ function renderApproval(ask: PermissionAsk): HTMLElement {
   return card;
 }
 
+function describePermission(p: PlanPermission): [string, string] {
+  if (p.kind === 'files') return ['파일 쓰기·고치기', `${p.scope} 폴더 안`];
+  if (p.kind === 'command') return ['명령 실행', `"${p.scope}"로 시작하는 명령`];
+  if (p.scope.trim() === 'search') return ['웹 검색', '검색어는 그때그때'];
+  return ['웹 페이지 열기', `${p.scope} 사이트`];
+}
+
+function renderPlan(ask: PermissionAsk, plan: TeamPlan): HTMLElement {
+  const card = el('div', 'ask ask-approval ask-plan');
+  const who = ask.member ?? 'MD';
+  const head = el('div', 'ask-head');
+  const name = el('span', 'ask-who');
+  name.append(el('span', 'ask-name', who), el('span', 'ask-what', '팀 계획을 승인해 주세요'));
+  head.append(el('span', 'ask-avatar', Array.from(who)[0] ?? '?'), name);
+  const body = el('div', 'plan-body');
+  body.append(el('p', 'plan-summary', plan.summary));
+  if (plan.assignments.length) {
+    const list = el('ul', 'plan-list');
+    for (const a of plan.assignments) {
+      const li = el('li', '');
+      li.append(el('strong', '', a.member), el('span', '', a.task));
+      list.append(li);
+    }
+    body.append(el('h4', 'plan-heading', '누가 무엇을'), list);
+  }
+  const perms = el('ul', 'plan-list plan-perms');
+  for (const p of plan.permissions) {
+    const [what, where] = describePermission(p);
+    const li = el('li', '');
+    li.append(el('strong', '', what), el('span', '', where), el('em', '', p.why));
+    perms.append(li);
+  }
+  body.append(
+    el('h4', 'plan-heading', '승인하면 묻지 않고 허용할 일'),
+    plan.permissions.length ? perms : el('p', 'plan-none', '없음. 필요할 때마다 물어봐요.'),
+    el(
+      'p',
+      'plan-note',
+      '이 범위 밖의 일은 지금처럼 하나씩 물어봐요. 모든 허용은 기록으로 남아요.',
+    ),
+  );
+  const approve = keyedButton('btn btn-primary', '승인하고 시작', '1');
+  const revise = keyedButton('btn btn-deny', '고쳐 달라고 하기', '2');
+  const feedback = el('textarea', 'plan-feedback') as HTMLTextAreaElement;
+  feedback.placeholder = '무엇을 바꾸면 좋을지 적어 주세요';
+  feedback.rows = 3;
+  feedback.hidden = true;
+  const sendFeedback = el('button', 'btn btn-deny plan-send') as HTMLButtonElement;
+  sendFeedback.type = 'button';
+  sendFeedback.textContent = '이대로 다시 짜 달라고 보내기';
+  sendFeedback.hidden = true;
+  approve.addEventListener('click', () => void answer(ask.requestId, true, card));
+  revise.addEventListener('click', () => {
+    feedback.hidden = false;
+    sendFeedback.hidden = false;
+    feedback.focus();
+  });
+  sendFeedback.addEventListener(
+    'click',
+    () => void answer(ask.requestId, false, card, feedback.value.trim()),
+  );
+  const actions = el('div', 'ask-actions');
+  actions.append(approve, revise);
+  card.append(head, body, actions, feedback, sendFeedback);
+  return card;
+}
+
 function renderAsks(asks: PermissionAsk[]): void {
   const signature = asks.map((a) => a.requestId).join(',');
   if (signature === lastAsks) return;
@@ -702,15 +784,27 @@ function renderAsks(asks: PermissionAsk[]): void {
   activeQuestion = null;
   asksEl.replaceChildren(
     ...asks.map((ask) =>
-      ask.questions ? renderQuestion(ask, ask.questions) : renderApproval(ask),
+      ask.questions
+        ? renderQuestion(ask, ask.questions)
+        : ask.plan
+          ? renderPlan(ask, ask.plan)
+          : renderApproval(ask),
     ),
   );
 }
 
-async function answer(requestId: string, allow: boolean, card: HTMLElement): Promise<void> {
+async function answer(
+  requestId: string,
+  allow: boolean,
+  card: HTMLElement,
+  feedback?: string,
+): Promise<void> {
   card.querySelectorAll('button').forEach((b) => (b.disabled = true));
   try {
-    await postJson(`./api/dashboard/permissions/${requestId}`, token, { allow });
+    await postJson(`./api/dashboard/permissions/${requestId}`, token, {
+      allow,
+      ...(feedback ? { feedback } : {}),
+    });
     card.remove();
   } catch (err) {
     errorEl.textContent = `승인 처리 실패: ${String(err)}`;

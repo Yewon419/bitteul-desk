@@ -22,6 +22,16 @@ import * as os from 'os';
 import * as path from 'path';
 
 import {
+  appendAudit,
+  describePermission,
+  PLAN_SERVER,
+  PLAN_TOOL,
+  planAllows,
+  type PlanDecision,
+  planServer,
+  type TeamPlan,
+} from './teamPlan.js';
+import {
   leadInstructions,
   rosterProblem,
   TEAM_ENV,
@@ -58,6 +68,16 @@ export interface PermissionAsk {
   agentId?: string;
   /** Team sessions: who is asking, as the dashboard names them ('개발자', 'MD'). */
   member?: string;
+  /** Present when the MD submits its team plan for approval. */
+  plan?: TeamPlan;
+}
+
+/** What the dashboard shows about a team session. */
+export interface TeamStatus {
+  name: string;
+  plan: 'none' | 'waiting' | 'approved';
+  /** Requests the approved plan allowed without asking. */
+  autoAllowed: number;
 }
 
 /** 'teammate': a team member's own transcript; it takes work through the MD, not the chat. */
@@ -116,6 +136,9 @@ interface Managed {
   members: Map<string, string>;
   /** Team sessions: members working right now. They keep going after the MD's turn ends. */
   running: Set<string>;
+  /** Team sessions: the plan the user approved; requests inside it skip the ask. */
+  plan: TeamPlan | null;
+  autoAllowed: number;
 }
 
 interface Pending extends PermissionAsk {
@@ -290,15 +313,30 @@ export class ManagedSessions {
       : null;
     return [...this.pending.values()]
       .filter((p) => (memberId ? p.agentId === memberId : p.sessionId === sessionId))
-      .map(({ requestId, sessionId: sid, toolName, summary, questions, agentId, member }) => ({
-        requestId,
-        sessionId: sid,
-        toolName,
-        summary,
-        ...(questions ? { questions } : {}),
-        ...(agentId ? { agentId } : {}),
-        ...(member ? { member } : {}),
-      }));
+      .map(
+        ({ requestId, sessionId: sid, toolName, summary, questions, agentId, member, plan }) => ({
+          requestId,
+          sessionId: sid,
+          toolName,
+          summary,
+          ...(questions ? { questions } : {}),
+          ...(agentId ? { agentId } : {}),
+          ...(member ? { member } : {}),
+          ...(plan ? { plan } : {}),
+        }),
+      );
+  }
+
+  /** The MD's team: its name, where its plan stands, and how much the plan let through. */
+  teamStatus(sessionId: string): TeamStatus | null {
+    const s = this.sessions.get(sessionId);
+    if (!s?.team) return null;
+    const waiting = [...this.pending.values()].some((p) => p.sessionId === sessionId && p.plan);
+    return {
+      name: s.team.name,
+      plan: waiting ? 'waiting' : s.plan ? 'approved' : 'none',
+      autoAllowed: s.autoAllowed,
+    };
   }
 
   /** Who is asking, by the name the dashboard gives them; undefined outside a team. */
@@ -578,7 +616,8 @@ export class ManagedSessions {
     });
   }
 
-  answer(requestId: string, allow: boolean): void {
+  /** `feedback`: why the user said no, passed to the model (plan revisions use it). */
+  answer(requestId: string, allow: boolean, feedback?: string): void {
     const ask = this.pending.get(requestId);
     if (!ask) throw new DashboardSessionError(`no pending permission ${requestId}`, 404);
     this.pending.delete(requestId);
@@ -588,10 +627,35 @@ export class ManagedSessions {
       tool: ask.toolName,
       allow,
     });
+    if (this.sessions.get(ask.sessionId)?.team) {
+      const decision = ask.plan
+        ? allow
+          ? 'plan-approved'
+          : 'plan-rejected'
+        : allow
+          ? 'allowed'
+          : 'denied';
+      appendAudit(
+        {
+          sessionId: ask.sessionId,
+          ...(ask.member ? { member: ask.member } : {}),
+          tool: ask.toolName,
+          summary: ask.summary,
+          decision,
+        },
+        this.log,
+      );
+    }
+    const reason = feedback?.trim();
     ask.resolve(
       allow
         ? { behavior: 'allow' }
-        : { behavior: 'deny', message: '사용자가 대시보드에서 거부했습니다.' },
+        : {
+            behavior: 'deny',
+            message: reason
+              ? `사용자가 대시보드에서 거부했습니다: ${reason}`
+              : '사용자가 대시보드에서 거부했습니다.',
+          },
     );
   }
 
@@ -666,11 +730,36 @@ export class ManagedSessions {
     };
     let sessionId = opts.resume ?? '';
     const team = opts.team ?? null;
+    const cwd = team?.cwd ?? this.cwd;
     const canUseTool: CanUseTool = (toolName, input, { signal, agentID }) =>
       new Promise<PermissionResult>((resolve) => {
         const requestId = crypto.randomUUID();
         const questions = toolName === QUESTION_TOOL ? parseQuestions(input) : null;
         const member = this.memberLabel(sessionId, agentID);
+        const live = this.sessions.get(sessionId);
+        const rule = live?.plan && !questions ? planAllows(live.plan, cwd, toolName, input) : null;
+        if (live && rule) {
+          live.autoAllowed += 1;
+          this.log('permission auto-allowed by team plan', {
+            sessionId,
+            toolName,
+            rule: describePermission(rule),
+            ...(member ? { member } : {}),
+          });
+          appendAudit(
+            {
+              sessionId,
+              ...(member ? { member } : {}),
+              tool: toolName,
+              summary: summarize(toolName, input),
+              decision: 'auto-allowed',
+              rule: describePermission(rule),
+            },
+            this.log,
+          );
+          resolve({ behavior: 'allow' });
+          return;
+        }
         this.pending.set(requestId, {
           requestId,
           sessionId,
@@ -694,11 +783,46 @@ export class ManagedSessions {
           ...(agentID ? { agentId: agentID, member } : {}),
         });
       });
+    // The MD hands in its plan through this tool; the call waits until the user decides.
+    const submitPlan = (plan: TeamPlan): Promise<PlanDecision> =>
+      new Promise<PlanDecision>((decide) => {
+        const requestId = crypto.randomUUID();
+        this.pending.set(requestId, {
+          requestId,
+          sessionId,
+          toolName: PLAN_TOOL,
+          summary: plan.summary,
+          // The card names members the way the user named them.
+          plan: {
+            ...plan,
+            assignments: plan.assignments.map((a) => ({
+              ...a,
+              member: team?.members.find((m) => m.key === a.member)?.label ?? a.member,
+            })),
+          },
+          ...(team ? { member: team.leadLabel } : {}),
+          input: {},
+          resolve: (result) => {
+            const s = this.sessions.get(sessionId);
+            if (result.behavior === 'allow' && s) {
+              s.plan = plan;
+              this.teams.rememberPlan(sessionId, plan);
+              decide({ approved: true });
+              return;
+            }
+            decide({
+              approved: false,
+              ...(result.behavior === 'deny' ? { feedback: result.message } : {}),
+            });
+          },
+        });
+        this.log('team plan submitted', { requestId, sessionId });
+      });
     const q = query({
       prompt,
       options: {
         pathToClaudeCodeExecutable: this.claudeExe,
-        cwd: team?.cwd ?? this.cwd,
+        cwd,
         permissionMode: settings.mode,
         promptSuggestions: true,
         ...(settings.model ? { model: settings.model } : {}),
@@ -709,6 +833,8 @@ export class ManagedSessions {
           ? {
               env: { ...process.env, ...TEAM_ENV },
               agents: teamAgents(team),
+              mcpServers: { [PLAN_SERVER]: await planServer(submitPlan) },
+              allowedTools: [PLAN_TOOL],
               systemPrompt: {
                 type: 'preset' as const,
                 preset: 'claude_code' as const,
@@ -746,6 +872,8 @@ export class ManagedSessions {
                 team,
                 members: new Map(),
                 running: new Set(),
+                plan: opts.resume && team ? (this.teams.planOf(opts.resume) ?? null) : null,
+                autoAllowed: 0,
               });
               this.preferred.delete(sessionId);
               if (team) this.teams.remember(sessionId, team);
