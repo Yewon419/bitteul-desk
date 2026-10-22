@@ -415,6 +415,78 @@
         display: flex;
         gap: 8px;
       }
+      /* Approval card: who asks, what they want in plain words, then the exact detail. */
+      .ask.ask-approval {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--warn);
+        border-radius: 6px;
+        padding: 12px 14px;
+      }
+      .ask-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .ask-avatar {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        background: #3a3016;
+        color: var(--warn);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .ask-who {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .ask-name {
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .ask-what {
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+      .ask-tool {
+        flex: none;
+        font-size: 11px;
+        color: var(--dim);
+      }
+      .ask-detail {
+        margin: 0 0 12px;
+        padding: 8px 10px;
+        max-height: 160px;
+        overflow: auto;
+        font-family: var(--code);
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-all;
+        background: var(--bg);
+        border-radius: 4px;
+      }
+      .ask-approval .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .btn-deny {
+        color: var(--danger);
+      }
+      .key {
+        font-size: 11px;
+        opacity: 0.7;
+      }
       .question {
         margin: 0 0 12px;
       }
@@ -816,8 +888,12 @@
         }
       }
       @media (pointer: coarse) {
-        .hint {
+        .hint,
+        .key {
           display: none;
+        }
+        .ask-actions .btn {
+          justify-content: center;
         }
       }
     </style>

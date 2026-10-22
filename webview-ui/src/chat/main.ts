@@ -479,6 +479,11 @@ function renderStatus(): void {
     status = '답 기다리는 중';
   } else if (meta.pending.length) {
     status = '승인 대기';
+    if (meta.owner === 'teammate') locked = true;
+  } else if (meta.owner === 'teammate') {
+    status = meta.busy ? '팀 작업 중' : '팀원 대기';
+    note = '팀원은 MD를 통해 일을 받아요. 지시는 MD 창에서 해 주세요.';
+    locked = true;
   } else if (meta.owner === 'terminal') {
     status = '보기 전용';
     note =
@@ -503,9 +508,10 @@ function renderStatus(): void {
     creating ||
     dismissed ||
     meta.owner === 'terminal' ||
+    meta.owner === 'teammate' ||
     window.matchMedia(TOUCH_MEDIA).matches;
   terminalBtn.disabled = !meta || meta.busy || meta.pending.length > 0;
-  dismissBtn.hidden = !meta || creating || dismissed;
+  dismissBtn.hidden = !meta || creating || dismissed || meta.owner === 'teammate';
   dismissBtn.disabled = !meta || meta.busy || meta.pending.length > 0;
   dismissBtn.title =
     meta?.owner === 'terminal'
@@ -635,31 +641,60 @@ function renderQuestion(ask: PermissionAsk, questions: Question[]): HTMLElement 
   return card;
 }
 
+/** What a tool call would do, in plain words for the approval card. */
+function askVerb(toolName: string): string {
+  if (toolName === 'Bash' || toolName === 'PowerShell') return '명령을 실행하려고 해요';
+  if (toolName === 'Write') return '파일을 새로 쓰려고 해요';
+  if (toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'NotebookEdit')
+    return '파일을 고치려고 해요';
+  if (toolName === 'Read') return '파일을 읽으려고 해요';
+  if (toolName === 'WebFetch') return '웹 페이지를 열려고 해요';
+  if (toolName === 'WebSearch') return '웹을 검색하려고 해요';
+  if (toolName === 'ExitPlanMode') return '계획을 마치고 실행하려고 해요';
+  if (toolName.startsWith('mcp__')) return '연결된 외부 도구를 쓰려고 해요';
+  return '도구를 쓰려고 해요';
+}
+
+/** The summary is "Tool: detail"; the card already names the tool. */
+function askDetail(ask: PermissionAsk): string {
+  const prefix = `${ask.toolName}: `;
+  return ask.summary.startsWith(prefix) ? ask.summary.slice(prefix.length) : ask.summary;
+}
+
+function keyedButton(cls: string, label: string, key: string): HTMLButtonElement {
+  const b = el('button', cls);
+  b.type = 'button';
+  b.append(el('span', '', label), el('span', 'key', key));
+  return b;
+}
+
+function renderApproval(ask: PermissionAsk): HTMLElement {
+  const card = el('div', 'ask ask-approval');
+  const who = ask.member ?? (titleEl.textContent || '직원');
+  const head = el('div', 'ask-head');
+  const name = el('span', 'ask-who');
+  name.append(el('span', 'ask-name', who), el('span', 'ask-what', askVerb(ask.toolName)));
+  head.append(el('span', 'ask-avatar', Array.from(who)[0] ?? '?'), name);
+  head.append(el('span', 'ask-tool', ask.toolName));
+  const allow = keyedButton('btn btn-primary', '허용', '1');
+  const deny = keyedButton('btn btn-deny', '거부', '2');
+  allow.addEventListener('click', () => void answer(ask.requestId, true, card));
+  deny.addEventListener('click', () => void answer(ask.requestId, false, card));
+  const actions = el('div', 'ask-actions');
+  actions.append(allow, deny);
+  card.append(head, el('pre', 'ask-detail', askDetail(ask)), actions);
+  return card;
+}
+
 function renderAsks(asks: PermissionAsk[]): void {
   const signature = asks.map((a) => a.requestId).join(',');
   if (signature === lastAsks) return;
   lastAsks = signature;
   activeQuestion = null;
   asksEl.replaceChildren(
-    ...asks.map((ask) => {
-      if (ask.questions) return renderQuestion(ask, ask.questions);
-      const card = el('div', 'ask');
-      const allow = el('button', 'btn btn-primary', '1 허용');
-      const deny = el('button', 'btn', '2 거부');
-      allow.type = 'button';
-      deny.type = 'button';
-      allow.addEventListener('click', () => void answer(ask.requestId, true, card));
-      deny.addEventListener('click', () => void answer(ask.requestId, false, card));
-      const actions = el('div', 'ask-actions');
-      actions.append(allow, deny);
-      card.append(
-        el('p', 'ask-title', '승인 요청'),
-        el('pre', 'ask-text', ask.summary),
-        actions,
-        el('p', 'q-hint', '숫자 키 1 = 허용, 2 = 거부'),
-      );
-      return card;
-    }),
+    ...asks.map((ask) =>
+      ask.questions ? renderQuestion(ask, ask.questions) : renderApproval(ask),
+    ),
   );
 }
 
@@ -860,7 +895,9 @@ function modelName(value: string | null): string {
 }
 
 function renderControls(): void {
-  const usable = creating || (!!meta && !!meta.settings && meta.owner !== 'terminal');
+  const usable =
+    creating ||
+    (!!meta && !!meta.settings && meta.owner !== 'terminal' && meta.owner !== 'teammate');
   const touch = window.matchMedia(TOUCH_MEDIA).matches;
   controlsEl.hidden = dismissed || (!usable && !touch);
   lowDataWrap.hidden = !touch;

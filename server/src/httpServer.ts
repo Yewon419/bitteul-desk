@@ -413,6 +413,38 @@ function registerDashboardRoutes(
     },
   );
 
+  // A team: the new session is the MD, the text is the brief, and the members join as it delegates.
+  app.post<{
+    Body: {
+      text: string;
+      seat?: number;
+      mode?: DashboardMode;
+      model?: string | null;
+      attachments?: Attachment[];
+    };
+  }>(
+    '/api/dashboard/teams',
+    { ...auth, schema: { body: SESSION_BODY } },
+    async (request, reply) => {
+      const { text, mode, model, attachments } = request.body;
+      const content = turnContent(text, attachments);
+      if (typeof content === 'object' && 'error' in content) {
+        return reply.code(400).send(content);
+      }
+      if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      return sendOrFail(reply, async () => {
+        const sessionId = await managed.startTeam(content, {
+          ...(mode ? { mode } : {}),
+          ...(model !== undefined && model !== null ? { model } : {}),
+        });
+        if (request.body.seat !== undefined) {
+          scene?.moveSeats([{ sessionId, seat: request.body.seat }]);
+        }
+        return { sessionId };
+      });
+    },
+  );
+
   app.post<{ Params: { requestId: string }; Body: { allow: boolean } }>(
     '/api/dashboard/permissions/:requestId',
     {

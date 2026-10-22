@@ -21,6 +21,14 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+import {
+  DEFAULT_TEAM,
+  leadInstructions,
+  TEAM_ENV,
+  teamAgents,
+  TeamRegistry,
+  type TeamRoster,
+} from './teams.js';
 import type { MessageBlock } from './uploads.js';
 
 /** A user turn: plain text, or text plus embedded pictures from the chat's attachments. */
@@ -46,9 +54,17 @@ export interface PermissionAsk {
   summary: string;
   /** Present when the agent is asking the user to choose, not asking for approval. */
   questions?: Question[];
+  /** Team sessions: the subagent asking (absent when the MD itself asks). */
+  agentId?: string;
+  /** Team sessions: who is asking, as the dashboard names them ('개발자', 'MD'). */
+  member?: string;
 }
 
-export type SessionOwner = 'dashboard' | 'terminal' | 'none';
+/** 'teammate': a team member's own transcript; it takes work through the MD, not the chat. */
+export type SessionOwner = 'dashboard' | 'terminal' | 'teammate' | 'none';
+
+/** A subagent's transcript is `subagents/agent-<agentId>.jsonl`; its basename is its session key. */
+const MEMBER_SESSION_PREFIX = 'agent-';
 
 /** Permission modes the chat window offers; bypassPermissions and dontAsk stay off the menu. */
 export const DASHBOARD_MODES = ['auto', 'default', 'acceptEdits', 'plan'] as const;
@@ -95,6 +111,11 @@ interface Managed {
   push: (content: TurnContent) => void;
   close: () => void;
   query: Query;
+  team: TeamRoster | null;
+  /** Team sessions: agent id -> member key, learned from each member's task_started. */
+  members: Map<string, string>;
+  /** Team sessions: members working right now. They keep going after the MD's turn ends. */
+  running: Set<string>;
 }
 
 interface Pending extends PermissionAsk {
@@ -236,27 +257,54 @@ export class ManagedSessions {
     /** The Claude Code executable itself (not a .cmd/.ps1 shim), for anything that launches it. */
     readonly claudeExe: string,
     private readonly log: (msg: string, extra?: Record<string, unknown>) => void,
+    private readonly teams: TeamRegistry = new TeamRegistry(),
   ) {}
+
+  /** The live team session a member transcript ('agent-<id>') belongs to. */
+  private teamOfMember(sessionId: string): Managed | undefined {
+    if (!sessionId.startsWith(MEMBER_SESSION_PREFIX)) return undefined;
+    const agentId = sessionId.slice(MEMBER_SESSION_PREFIX.length);
+    return [...this.sessions.values()].find((s) => s.members.has(agentId));
+  }
 
   owner(sessionId: string, liveTerminalIds: Set<string>): SessionOwner {
     if (this.sessions.has(sessionId)) return 'dashboard';
+    if (this.teamOfMember(sessionId)) return 'teammate';
     return liveTerminalIds.has(sessionId) ? 'terminal' : 'none';
   }
 
   isBusy(sessionId: string): boolean {
-    return this.sessions.get(sessionId)?.busy ?? false;
+    const session = this.sessions.get(sessionId);
+    if (session) return session.busy || session.running.size > 0;
+    const team = this.teamOfMember(sessionId);
+    return !!team && team.running.has(sessionId.slice(MEMBER_SESSION_PREFIX.length));
   }
 
+  /** A team member's transcript lists only that member's asks; the MD's lists the whole team's. */
   pendingFor(sessionId: string): PermissionAsk[] {
+    const memberId = this.teamOfMember(sessionId)
+      ? sessionId.slice(MEMBER_SESSION_PREFIX.length)
+      : null;
     return [...this.pending.values()]
-      .filter((p) => p.sessionId === sessionId)
-      .map(({ requestId, sessionId: sid, toolName, summary, questions }) => ({
+      .filter((p) => (memberId ? p.agentId === memberId : p.sessionId === sessionId))
+      .map(({ requestId, sessionId: sid, toolName, summary, questions, agentId, member }) => ({
         requestId,
         sessionId: sid,
         toolName,
         summary,
         ...(questions ? { questions } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(member ? { member } : {}),
       }));
+  }
+
+  /** Who is asking, by the name the dashboard gives them; undefined outside a team. */
+  private memberLabel(sessionId: string, agentId: string | undefined): string | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session?.team) return undefined;
+    if (!agentId) return session.team.leadLabel;
+    const key = session.members.get(agentId);
+    return session.team.members.find((m) => m.key === key)?.label ?? key ?? '팀원';
   }
 
   activity(sessionId: string): TurnActivity | null {
@@ -483,6 +531,9 @@ export class ManagedSessions {
     content: TurnContent,
     transcriptModel: string | null,
   ): Promise<void> {
+    if (this.teamOfMember(sessionId)) {
+      throw new DashboardSessionError('team members take work through the MD', 409);
+    }
     const managed = this.sessions.get(sessionId);
     if (managed) {
       // A message sent mid-turn joins the running turn; keep its clock and token count.
@@ -497,12 +548,26 @@ export class ManagedSessions {
     }
     // aliasFor needs the model list; without it a bare id could resume on a smaller window.
     if (transcriptModel) await this.probedCatalog();
-    await this.open({ resume: sessionId }, content, this.settingsFor(sessionId, transcriptModel));
+    await this.open(
+      { resume: sessionId, team: this.teams.rosterOf(sessionId) },
+      content,
+      this.settingsFor(sessionId, transcriptModel),
+    );
   }
 
   /** Start a brand-new session with a first message. Resolves with its session id. */
   async start(content: TurnContent, settings?: Partial<SessionSettings>): Promise<string> {
     return this.open({}, content, { ...this.settingsFor(''), ...settings });
+  }
+
+  /** Start a team: this session is the MD, and the brief is its first message. */
+  async startTeam(content: TurnContent, settings?: Partial<SessionSettings>): Promise<string> {
+    const team = DEFAULT_TEAM;
+    return this.open({ team }, content, {
+      ...this.settingsFor(''),
+      model: team.leadModel,
+      ...settings,
+    });
   }
 
   answer(requestId: string, allow: boolean): void {
@@ -565,7 +630,7 @@ export class ManagedSessions {
   }
 
   private async open(
-    opts: { resume?: string },
+    opts: { resume?: string; team?: TeamRoster },
     firstContent: TurnContent,
     settings: SessionSettings,
   ): Promise<string> {
@@ -592,16 +657,20 @@ export class ManagedSessions {
       },
     };
     let sessionId = opts.resume ?? '';
-    const canUseTool: CanUseTool = (toolName, input, { signal }) =>
+    const team = opts.team ?? null;
+    const canUseTool: CanUseTool = (toolName, input, { signal, agentID }) =>
       new Promise<PermissionResult>((resolve) => {
         const requestId = crypto.randomUUID();
         const questions = toolName === QUESTION_TOOL ? parseQuestions(input) : null;
+        const member = this.memberLabel(sessionId, agentID);
         this.pending.set(requestId, {
           requestId,
           sessionId,
           toolName,
           summary: summarize(toolName, input),
           ...(questions ? { questions } : {}),
+          ...(agentID ? { agentId: agentID } : {}),
+          ...(member ? { member } : {}),
           input,
           resolve,
         });
@@ -610,7 +679,12 @@ export class ManagedSessions {
           if (!this.pending.delete(requestId)) return;
           resolve({ behavior: 'deny', message: 'interrupted' });
         });
-        this.log('permission requested', { requestId, sessionId, toolName });
+        this.log('permission requested', {
+          requestId,
+          sessionId,
+          toolName,
+          ...(agentID ? { agentId: agentID, member } : {}),
+        });
       });
     const q = query({
       prompt,
@@ -623,6 +697,17 @@ export class ManagedSessions {
         canUseTool,
         ...(opts.resume ? { resume: opts.resume } : {}),
         ...(chromeByDefault(this.log) ? { extraArgs: { chrome: null } } : {}),
+        ...(team
+          ? {
+              env: { ...process.env, ...TEAM_ENV },
+              agents: teamAgents(team),
+              systemPrompt: {
+                type: 'preset' as const,
+                preset: 'claude_code' as const,
+                append: leadInstructions(team),
+              },
+            }
+          : {}),
       },
     });
     const close = (): void => {
@@ -650,16 +735,46 @@ export class ManagedSessions {
                 push: (t) => push(t),
                 close,
                 query: q,
+                team,
+                members: new Map(),
+                running: new Set(),
               });
               this.preferred.delete(sessionId);
-              this.log('dashboard session started', { sessionId, resumed: !!opts.resume });
+              if (team) this.teams.remember(sessionId, team);
+              this.log('dashboard session started', {
+                sessionId,
+                resumed: !!opts.resume,
+                team: !!team,
+              });
               resolve(sessionId);
+            }
+            if (m.type === 'system' && m.subtype === 'task_started') {
+              const s = this.sessions.get(sessionId);
+              const key = m.subagent_type;
+              // A member woken by SendMessage starts again under the same task id.
+              if (s?.team && key && s.team.members.some((mem) => mem.key === key)) {
+                s.members.set(m.task_id, key);
+                s.running.add(m.task_id);
+                this.log('team member working', { sessionId, agentId: m.task_id, member: key });
+              }
+            }
+            if (m.type === 'system' && m.subtype === 'task_notification') {
+              const s = this.sessions.get(sessionId);
+              if (s?.running.delete(m.task_id)) {
+                this.log('team member stopped', {
+                  sessionId,
+                  agentId: m.task_id,
+                  status: m.status,
+                });
+              }
             }
             if (m.type === 'assistant') {
               const s = this.sessions.get(sessionId);
+              // A member's own output is not the MD's turn; running tracks the members.
+              const memberOutput = !!s?.team && m.parent_tool_use_id !== null;
               // A result can end one turn while the model keeps working on a message that
               // arrived mid-turn (or after a compaction turn): any assistant output means busy.
-              if (s && !s.turn) {
+              if (s && !s.turn && !memberOutput) {
                 s.busy = true;
                 s.turn = newTurn();
                 s.suggestion = null;

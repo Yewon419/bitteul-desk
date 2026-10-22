@@ -42,9 +42,12 @@ export interface PermissionAsk {
   summary: string;
   /** Set when the agent asks the user to choose (AskUserQuestion) instead of asking approval. */
   questions?: Question[];
+  /** Team sessions: the member asking ('개발자', or 'MD' when the lead asks). */
+  member?: string;
 }
 
-export type SessionOwner = 'dashboard' | 'terminal' | 'none';
+/** 'teammate': a team member's own window; work reaches it through the MD. */
+export type SessionOwner = 'dashboard' | 'terminal' | 'teammate' | 'none';
 
 export interface SessionSettings {
   mode: 'auto' | 'default' | 'acceptEdits' | 'plan';
