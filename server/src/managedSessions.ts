@@ -8,10 +8,12 @@
 
 import type {
   CanUseTool,
+  HookCallback,
   ModelInfo,
   PermissionResult,
   Query,
   SDKMessage,
+  SDKRateLimitInfo,
   SDKUserMessage,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk' with { 'resolution-mode': 'import' };
@@ -70,6 +72,35 @@ export interface PermissionAsk {
   member?: string;
   /** Present when the MD submits its team plan for approval. */
   plan?: TeamPlan;
+  /** Present when members kept messaging each other this many times with no word from the user. */
+  chatter?: number;
+}
+
+/** One member on the team board. Usage adds up every time the member was brought in. */
+export interface MemberStatus {
+  label: string;
+  state: 'idle' | 'working' | 'done' | 'failed' | 'stopped';
+  tokens: number;
+  toolUses: number;
+  lastTool: string | null;
+}
+
+/** One of the account's usage limits (the "작업한도"), as the CLI last reported it. */
+export interface WorkLimit {
+  kind: string;
+  status: SDKRateLimitInfo['status'];
+  /** 0..1, when reported. */
+  utilization: number | null;
+  /** Epoch seconds. */
+  resetsAt: number | null;
+}
+
+/** Extra-usage credits, as the CLI last reported them; null until it reports any. */
+export interface CreditStatus {
+  usingCredits: boolean;
+  status: SDKRateLimitInfo['overageStatus'] | null;
+  disabledReason: SDKRateLimitInfo['overageDisabledReason'] | null;
+  required: boolean;
 }
 
 /** What the dashboard shows about a team session. */
@@ -78,6 +109,23 @@ export interface TeamStatus {
   plan: 'none' | 'waiting' | 'approved';
   /** Requests the approved plan allowed without asking. */
   autoAllowed: number;
+  /** Dollars this run of the team has spent, by the SDK's estimate. */
+  costUsd: number;
+  budgetUsd: number | null;
+  /** The SDK stopped the session because the budget ran out. */
+  budgetStopped: boolean;
+  limits: WorkLimit[];
+  credits: CreditStatus | null;
+  members: MemberStatus[];
+  /** The session has ended; this is its last status. */
+  ended: boolean;
+}
+
+interface MemberUsage {
+  state: MemberStatus['state'];
+  tokens: number;
+  toolUses: number;
+  lastTool: string | null;
 }
 
 /** 'teammate': a team member's own transcript; it takes work through the MD, not the chat. */
@@ -139,6 +187,17 @@ interface Managed {
   /** Team sessions: the plan the user approved; requests inside it skip the ask. */
   plan: TeamPlan | null;
   autoAllowed: number;
+  /** The SDK's running total; a resumed session's starts at what the last run left. */
+  costUsd: number;
+  /** costUsd when this run began: the budget counts only this run's spend. */
+  costAtStart: number;
+  budgetStopped: boolean;
+  /** Team sessions: per task id, what each member has used. */
+  usage: Map<string, MemberUsage>;
+  /** SendMessage calls since the user last wrote; too many and the user is asked. */
+  chatter: number;
+  /** The open chatter question; members messaging meanwhile wait on the same answer. */
+  chatterAsk: Promise<boolean> | null;
 }
 
 interface Pending extends PermissionAsk {
@@ -170,6 +229,11 @@ function processAlive(pid: number): boolean {
   }
 }
 const SUMMARY_CHARS = 200;
+/** Messages between members (and the MD) with no word from the user before the user is asked. */
+const CHATTER_LIMIT = 24;
+const CHATTER_TOOL = 'SendMessage';
+/** The chatter question waits for the user as long as a plan approval does. */
+const CHATTER_WAIT_S = 24 * 60 * 60;
 const QUESTION_TOOL = 'AskUserQuestion';
 const MAX_ANSWER_CHARS = 2000;
 
@@ -268,6 +332,10 @@ export class ManagedSessions {
   private readonly sessions = new Map<string, Managed>();
   private readonly pending = new Map<string, Pending>();
   private liveCache: { at: number; ids: Set<string> } | null = null;
+  /** Account usage limits by kind, as the CLI last reported them. Shared by every session. */
+  private readonly rateLimits = new Map<string, SDKRateLimitInfo>();
+  /** Teams that ended, so the chat can still say why (e.g. the budget ran out). */
+  private readonly endedTeams = new Map<string, TeamStatus>();
   /** Mode/model chosen for a session before the dashboard holds it; applied when it opens. */
   private readonly preferred = new Map<string, SessionSettings>();
   /** What the CLI binary on disk reported, tagged with that binary and the user settings
@@ -314,7 +382,17 @@ export class ManagedSessions {
     return [...this.pending.values()]
       .filter((p) => (memberId ? p.agentId === memberId : p.sessionId === sessionId))
       .map(
-        ({ requestId, sessionId: sid, toolName, summary, questions, agentId, member, plan }) => ({
+        ({
+          requestId,
+          sessionId: sid,
+          toolName,
+          summary,
+          questions,
+          agentId,
+          member,
+          plan,
+          chatter,
+        }) => ({
           requestId,
           sessionId: sid,
           toolName,
@@ -323,19 +401,57 @@ export class ManagedSessions {
           ...(agentId ? { agentId } : {}),
           ...(member ? { member } : {}),
           ...(plan ? { plan } : {}),
+          ...(chatter ? { chatter } : {}),
         }),
       );
   }
 
-  /** The MD's team: its name, where its plan stands, and how much the plan let through. */
+  /** The MD's team board: plan, spend against the budget, account limits, and each member. */
   teamStatus(sessionId: string): TeamStatus | null {
     const s = this.sessions.get(sessionId);
-    if (!s?.team) return null;
+    if (!s?.team) return this.endedTeams.get(sessionId) ?? null;
+    const team = s.team;
     const waiting = [...this.pending.values()].some((p) => p.sessionId === sessionId && p.plan);
+    const members = team.members.map((m): MemberStatus => {
+      const runs = [...s.members].filter(([, key]) => key === m.key).map(([id]) => s.usage.get(id));
+      const used = runs.filter((u): u is MemberUsage => !!u);
+      const last = used[used.length - 1];
+      return {
+        label: m.label,
+        state: used.some((u) => u.state === 'working') ? 'working' : (last?.state ?? 'idle'),
+        tokens: used.reduce((n, u) => n + u.tokens, 0),
+        toolUses: used.reduce((n, u) => n + u.toolUses, 0),
+        lastTool: last?.lastTool ?? null,
+      };
+    });
+    const credits = [...this.rateLimits.values()].find(
+      (r) => r.overageStatus || r.isUsingOverage || r.overageDisabledReason || r.errorCode,
+    );
     return {
-      name: s.team.name,
+      name: team.name,
       plan: waiting ? 'waiting' : s.plan ? 'approved' : 'none',
       autoAllowed: s.autoAllowed,
+      costUsd: Math.max(0, s.costUsd - s.costAtStart),
+      budgetUsd: team.budgetUsd ?? null,
+      budgetStopped: s.budgetStopped,
+      limits: [...this.rateLimits.entries()]
+        .filter(([kind]) => kind !== 'overage')
+        .map(([kind, r]) => ({
+          kind,
+          status: r.status,
+          utilization: r.utilization ?? null,
+          resetsAt: r.resetsAt ?? null,
+        })),
+      credits: credits
+        ? {
+            usingCredits: !!(credits.isUsingOverage ?? credits.overageInUse),
+            status: credits.overageStatus ?? null,
+            disabledReason: credits.overageDisabledReason ?? null,
+            required: credits.errorCode === 'credits_required',
+          }
+        : null,
+      members,
+      ended: false,
     };
   }
 
@@ -581,6 +697,7 @@ export class ManagedSessions {
       managed.busy = true;
       managed.turn ??= newTurn();
       managed.suggestion = null;
+      managed.chatter = 0;
       managed.push(content);
       return;
     }
@@ -818,6 +935,44 @@ export class ManagedSessions {
         });
         this.log('team plan submitted', { requestId, sessionId });
       });
+    // Members can keep messaging each other without the user; past a limit, ask whether to go on.
+    const chatterGuard: HookCallback = async (_input, _toolUseId, { signal }) => {
+      const s = this.sessions.get(sessionId);
+      if (!s?.team) return {};
+      s.chatter += 1;
+      if (s.chatter < CHATTER_LIMIT) return {};
+      const count = s.chatter;
+      s.chatterAsk ??= new Promise<boolean>((decide) => {
+        const requestId = crypto.randomUUID();
+        this.pending.set(requestId, {
+          requestId,
+          sessionId,
+          toolName: CHATTER_TOOL,
+          summary: `팀원끼리 메시지를 ${count}번 주고받았어요.`,
+          chatter: count,
+          member: s.team?.leadLabel ?? 'MD',
+          input: {},
+          resolve: (result) => decide(result.behavior === 'allow'),
+        });
+        signal.addEventListener('abort', () => {
+          if (this.pending.delete(requestId)) decide(false);
+        });
+        this.log('team chatter paused for the user', { requestId, sessionId, count });
+      }).finally(() => {
+        s.chatter = 0;
+        s.chatterAsk = null;
+      });
+      if (await s.chatterAsk) return {};
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            '사용자가 팀원끼리의 대화를 멈추게 했습니다. 더 주고받지 말고, 지금까지의 결과를 정리해 사용자에게 보고하세요.',
+        },
+      };
+    };
+    const costAtStart = opts.resume && team ? this.teams.costOf(opts.resume) : 0;
     const q = query({
       prompt,
       options: {
@@ -835,6 +990,12 @@ export class ManagedSessions {
               agents: teamAgents(team),
               mcpServers: { [PLAN_SERVER]: await planServer(submitPlan) },
               allowedTools: [PLAN_TOOL],
+              ...(team.budgetUsd ? { maxBudgetUsd: team.budgetUsd } : {}),
+              hooks: {
+                PreToolUse: [
+                  { matcher: CHATTER_TOOL, hooks: [chatterGuard], timeout: CHATTER_WAIT_S },
+                ],
+              },
               systemPrompt: {
                 type: 'preset' as const,
                 preset: 'claude_code' as const,
@@ -874,6 +1035,12 @@ export class ManagedSessions {
                 running: new Set(),
                 plan: opts.resume && team ? (this.teams.planOf(opts.resume) ?? null) : null,
                 autoAllowed: 0,
+                costUsd: costAtStart,
+                costAtStart,
+                budgetStopped: false,
+                usage: new Map(),
+                chatter: 0,
+                chatterAsk: null,
               });
               this.preferred.delete(sessionId);
               if (team) this.teams.remember(sessionId, team);
@@ -896,11 +1063,45 @@ export class ManagedSessions {
                 }
                 s.members.set(m.task_id, key);
                 s.running.add(m.task_id);
+                const used = s.usage.get(m.task_id);
+                if (used) used.state = 'working';
+                else
+                  s.usage.set(m.task_id, {
+                    state: 'working',
+                    tokens: 0,
+                    toolUses: 0,
+                    lastTool: null,
+                  });
                 this.log('team member working', { sessionId, agentId: m.task_id, member: key });
               }
             }
+            if (m.type === 'system' && m.subtype === 'task_progress') {
+              const used = this.sessions.get(sessionId)?.usage.get(m.task_id);
+              if (used) {
+                used.tokens = m.usage.total_tokens;
+                used.toolUses = m.usage.tool_uses;
+                used.lastTool = m.last_tool_name ?? used.lastTool;
+              }
+            }
+            if (m.type === 'rate_limit_event') {
+              const info = m.rate_limit_info;
+              this.rateLimits.set(info.rateLimitType ?? 'unknown', info);
+              this.log('usage limit reported', {
+                kind: info.rateLimitType,
+                status: info.status,
+                utilization: info.utilization,
+              });
+            }
             if (m.type === 'system' && m.subtype === 'task_notification') {
               const s = this.sessions.get(sessionId);
+              const used = s?.usage.get(m.task_id);
+              if (used) {
+                used.state = m.status === 'completed' ? 'done' : m.status;
+                if (m.usage) {
+                  used.tokens = m.usage.total_tokens;
+                  used.toolUses = m.usage.tool_uses;
+                }
+              }
               if (s?.running.delete(m.task_id)) {
                 this.log('team member stopped', {
                   sessionId,
@@ -930,6 +1131,18 @@ export class ManagedSessions {
                 s.busy = false;
                 s.turn = null;
               }
+              if (s?.team) {
+                s.costUsd = m.total_cost_usd;
+                this.teams.rememberCost(sessionId, m.total_cost_usd);
+                if (m.subtype === 'error_max_budget_usd') {
+                  s.budgetStopped = true;
+                  this.log('team stopped: budget used up', {
+                    sessionId,
+                    costUsd: m.total_cost_usd,
+                    budgetUsd: s.team.budgetUsd,
+                  });
+                }
+              }
             }
             if (m.type === 'prompt_suggestion') {
               const s = this.sessions.get(sessionId);
@@ -940,6 +1153,8 @@ export class ManagedSessions {
           this.log('dashboard session failed', { sessionId, error: String(err) });
           reject(err instanceof Error ? err : new Error(String(err)));
         } finally {
+          const last = this.teamStatus(sessionId);
+          if (last && !last.ended) this.endedTeams.set(sessionId, { ...last, ended: true });
           this.sessions.delete(sessionId);
           for (const [id, p] of this.pending) {
             if (p.sessionId === sessionId) {

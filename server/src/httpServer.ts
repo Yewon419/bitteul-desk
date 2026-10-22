@@ -42,6 +42,7 @@ import { type PhoneLink, qrSvg } from './phoneAccess.js';
 import { MAX_ROOM_TITLE, SceneState } from './sceneState.js';
 import {
   DEFAULT_TEAM,
+  MAX_TEAM_BUDGET_USD,
   MAX_TEAM_MEMBERS,
   MAX_TEAM_NAME,
   rosterProblem,
@@ -858,6 +859,7 @@ const TEAM_SCHEMA = {
     leadLabel: { type: 'string', minLength: 1, maxLength: 20 },
     leadModel: { type: 'string', enum: TEAM_MODELS },
     cwd: { type: 'string', minLength: 1, maxLength: 1000 },
+    budgetUsd: { type: 'number', exclusiveMinimum: 0, maximum: MAX_TEAM_BUDGET_USD },
     members: {
       type: 'array',
       minItems: 1,

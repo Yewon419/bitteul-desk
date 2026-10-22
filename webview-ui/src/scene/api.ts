@@ -46,6 +46,8 @@ export interface PermissionAsk {
   member?: string;
   /** Set when the MD submits its team plan for approval. */
   plan?: TeamPlan;
+  /** Set when members kept messaging each other this many times with no word from the user. */
+  chatter?: number;
 }
 
 export interface PlanPermission {
@@ -60,10 +62,40 @@ export interface TeamPlan {
   permissions: PlanPermission[];
 }
 
+export interface MemberStatus {
+  label: string;
+  state: 'idle' | 'working' | 'done' | 'failed' | 'stopped';
+  tokens: number;
+  toolUses: number;
+  lastTool: string | null;
+}
+
+export interface WorkLimit {
+  kind: string;
+  status: 'allowed' | 'allowed_warning' | 'rejected';
+  utilization: number | null;
+  /** Epoch seconds. */
+  resetsAt: number | null;
+}
+
+export interface CreditStatus {
+  usingCredits: boolean;
+  status: 'allowed' | 'allowed_warning' | 'rejected' | null;
+  disabledReason: string | null;
+  required: boolean;
+}
+
 export interface TeamStatus {
   name: string;
   plan: 'none' | 'waiting' | 'approved';
   autoAllowed: number;
+  costUsd: number;
+  budgetUsd: number | null;
+  budgetStopped: boolean;
+  limits: WorkLimit[];
+  credits: CreditStatus | null;
+  members: MemberStatus[];
+  ended: boolean;
 }
 
 /** 'teammate': a team member's own window; work reaches it through the MD. */
@@ -166,6 +198,8 @@ export interface TeamRoster {
   leadModel: string;
   members: TeamMember[];
   cwd?: string;
+  /** Spend cap in dollars for one run of the team. */
+  budgetUsd?: number;
 }
 
 export interface TeamTemplatesResponse {

@@ -66,6 +66,7 @@ export function initTeamModal(opts: Options): () => void {
   const deleteBtn = document.getElementById('team-template-delete') as HTMLButtonElement | null;
   const nameInput = document.getElementById('team-name') as HTMLInputElement | null;
   const cwdInput = document.getElementById('team-cwd') as HTMLInputElement | null;
+  const budgetInput = document.getElementById('team-budget') as HTMLInputElement | null;
   const addBtn = document.getElementById('team-add') as HTMLButtonElement | null;
   if (
     !modal ||
@@ -76,6 +77,7 @@ export function initTeamModal(opts: Options): () => void {
     !deleteBtn ||
     !nameInput ||
     !cwdInput ||
+    !budgetInput ||
     !addBtn
   ) {
     throw new Error('[Scene] team dialog markup missing');
@@ -158,6 +160,7 @@ export function initTeamModal(opts: Options): () => void {
     team = copyTeam(source);
     nameInput.value = name ? source.name : '';
     cwdInput.value = source.cwd ?? '';
+    budgetInput.value = source.budgetUsd === undefined ? '' : String(source.budgetUsd);
     deleteBtn.hidden = !name;
     say('');
     render();
@@ -173,12 +176,22 @@ export function initTeamModal(opts: Options): () => void {
     const blank = team.members.find((m) => !m.label.trim() || !m.role.trim());
     if (blank) return '팀원마다 이름과 맡을 일을 적어 주세요.';
     const cwd = cwdInput.value.trim();
+    const budgetText = budgetInput.value.trim();
+    const budgetUsd = budgetText ? Number(budgetText) : undefined;
+    if (budgetUsd !== undefined && !(budgetUsd > 0 && budgetUsd <= 1000)) {
+      return '예산은 0보다 크고 1000달러 이하로 적어 주세요. 한도 없이 하려면 비워 두세요.';
+    }
+    // The inputs decide these; a template's own values must not ride along when cleared.
+    const { cwd: _cwd, budgetUsd: _budget, ...rest } = team;
+    void _cwd;
+    void _budget;
     return {
-      ...team,
+      ...rest,
       name,
       leadLabel: team.leadLabel.trim(),
       members: team.members.map((m) => ({ ...m, label: m.label.trim(), role: m.role.trim() })),
       ...(cwd ? { cwd } : {}),
+      ...(budgetUsd !== undefined ? { budgetUsd } : {}),
     };
   };
 

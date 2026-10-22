@@ -12,9 +12,11 @@ import {
   announceChatWindow,
   type ConversationEntry,
   type ConversationResponse,
+  type CreditStatus,
   dropTeamDraft,
   fetchJson,
   type MediaRef,
+  type MemberStatus,
   type PermissionAsk,
   type PlanPermission,
   postJson,
@@ -22,6 +24,8 @@ import {
   readTeamDraft,
   takeChatDraft,
   type TeamPlan,
+  type TeamStatus,
+  type WorkLimit,
 } from '../scene/api.js';
 import {
   type CatalogCommand,
@@ -66,6 +70,7 @@ const statusEl = byId<HTMLSpanElement>('status');
 const logEl = byId<HTMLDivElement>('log');
 const asksEl = byId<HTMLDivElement>('asks');
 const noteEl = byId<HTMLParagraphElement>('note');
+const boardEl = byId<HTMLDetailsElement>('team-board');
 const input = byId<HTMLTextAreaElement>('input');
 const sendBtn = byId<HTMLButtonElement>('send');
 const errorEl = byId<HTMLParagraphElement>('error');
@@ -469,6 +474,141 @@ function setTitle(text: string): void {
   document.title = `${text} · 빛뜰 데스크`;
 }
 
+const BUDGET_WARN = 0.8;
+const LIMIT_NAMES: Record<string, string> = {
+  five_hour: '5시간 한도',
+  seven_day: '주간 한도',
+  seven_day_opus: '주간 Opus 한도',
+  seven_day_sonnet: '주간 Sonnet 한도',
+  seven_day_overage_included: '주간 한도',
+};
+const MEMBER_STATES: Record<MemberStatus['state'], string> = {
+  idle: '아직 안 불림',
+  working: '작업 중',
+  done: '끝냄',
+  failed: '실패',
+  stopped: '멈춤',
+};
+
+function dollars(n: number): string {
+  return `$${n.toFixed(2)}`;
+}
+
+function tokensText(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k 토큰` : `${n} 토큰`;
+}
+
+function resetText(epochSeconds: number): string {
+  const d = new Date(epochSeconds * 1000);
+  const time = d.toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString()
+    ? `${time} 초기화`
+    : `${d.getMonth() + 1}월 ${d.getDate()}일 ${time} 초기화`;
+}
+
+function limitText(l: WorkLimit): string {
+  const name = LIMIT_NAMES[l.kind] ?? '사용 한도';
+  const used =
+    l.utilization !== null
+      ? `${Math.round(l.utilization * 100)}% 사용`
+      : l.status === 'rejected'
+        ? '다 씀'
+        : l.status === 'allowed_warning'
+          ? '거의 다 씀'
+          : '여유 있음';
+  return [name, used, l.resetsAt ? resetText(l.resetsAt) : ''].filter(Boolean).join(' · ');
+}
+
+function creditText(c: CreditStatus | null): string {
+  if (!c) return '정보 없음 (아직 알려온 게 없어요)';
+  if (c.required) return '크레딧이 필요해요. 충전해야 이어서 할 수 있어요.';
+  if (c.disabledReason === 'out_of_credits') return '크레딧을 다 썼어요';
+  if (c.usingCredits) return '한도를 넘겨서 추가 크레딧으로 쓰는 중';
+  if (c.status === 'rejected') return '추가 크레딧을 쓸 수 없어요';
+  if (c.status) return '필요하면 추가 크레딧을 쓸 수 있어요';
+  return '추가 크레딧 꺼짐';
+}
+
+function boardRow(label: string, ...content: Array<Node | string>): HTMLElement {
+  const row = el('div', 'tb-row');
+  const value = el('span', '');
+  value.append(...content);
+  row.append(el('strong', '', label), value);
+  return row;
+}
+
+/** The MD window's team board: spend against the budget, account limits, credits, members. */
+function renderBoard(team: TeamStatus | null): void {
+  boardEl.hidden = !team;
+  if (!team) return;
+  const share = team.budgetUsd ? team.costUsd / team.budgetUsd : 0;
+  const level = team.budgetStopped || share >= 1 ? 'stop' : share >= BUDGET_WARN ? 'warn' : '';
+  if (level) boardEl.dataset.level = level;
+  else delete boardEl.dataset.level;
+  const money = team.budgetUsd
+    ? `${dollars(team.costUsd)} / ${dollars(team.budgetUsd)}`
+    : `${dollars(team.costUsd)} (한도 없음)`;
+  const firstLimit = team.limits[0];
+  const brief = boardEl.querySelector('.tb-brief');
+  if (brief) {
+    brief.textContent = [money, firstLimit ? limitText(firstLimit) : '']
+      .filter(Boolean)
+      .join(' · ');
+  }
+  const body = boardEl.querySelector('.tb-body');
+  if (!body) return;
+  const parts: HTMLElement[] = [];
+  if (team.budgetStopped) {
+    const alert = el(
+      'p',
+      'tb-alert',
+      `예산 ${dollars(team.budgetUsd ?? 0)}을 다 써서 팀을 멈췄어요. 이 팀은 더 진행할 수 없어요. 이어서 하려면 예산을 넉넉히 잡아 새 팀을 만들어 주세요.`,
+    );
+    alert.dataset.level = 'stop';
+    parts.push(alert);
+  } else if (level === 'warn') {
+    parts.push(
+      el('p', 'tb-alert', `예산의 ${Math.round(share * 100)}%를 썼어요. 다 쓰면 팀이 멈춰요.`),
+    );
+  }
+  const moneyCell: Array<Node | string> = [`${money} 사용 (예상치)`];
+  if (team.budgetUsd) {
+    const bar = el('div', 'tb-bar');
+    if (level) bar.dataset.level = level;
+    const fill = el('i', '');
+    fill.style.width = `${Math.min(100, Math.round(share * 100))}%`;
+    bar.append(fill);
+    moneyCell.push(bar);
+  }
+  parts.push(boardRow('달러', ...moneyCell));
+  parts.push(
+    boardRow(
+      '작업한도',
+      team.limits.length
+        ? team.limits.map(limitText).join(' / ')
+        : '정보 없음 (아직 알려온 게 없어요)',
+    ),
+  );
+  parts.push(boardRow('크레딧', creditText(team.credits)));
+  const list = el('ul', 'tb-members');
+  for (const m of team.members) {
+    const li = el('li', '');
+    const state = el('span', 'tb-state', MEMBER_STATES[m.state]);
+    state.dataset.state = m.state;
+    const detail =
+      m.state === 'idle'
+        ? ''
+        : [tokensText(m.tokens), `도구 ${m.toolUses}회`, m.lastTool ? `마지막: ${m.lastTool}` : '']
+            .filter(Boolean)
+            .join(' · ');
+    li.append(el('b', '', m.label), state);
+    if (detail) li.append(el('small', '', detail));
+    list.append(li);
+  }
+  parts.push(boardRow('팀원', list));
+  body.replaceChildren(...parts);
+}
+
 /** A team MD's plan state, for the status line. */
 function teamNote(m: AgentMeta): string {
   if (!m.team) return '';
@@ -509,6 +649,10 @@ function renderStatus(): void {
     note =
       '터미널에서 열려 있는 세션입니다. 터미널이 쉬는 중일 때 "여기서 이어받기"를 누르면 이 창에서 이어서 조작할 수 있어요.';
     locked = true;
+  } else if (meta.team?.budgetStopped) {
+    status = '예산 소진';
+    note = teamNote(meta);
+    locked = true;
   } else if (meta.busy) {
     status = '작업 중';
     note = teamNote(meta);
@@ -544,6 +688,7 @@ function renderStatus(): void {
   statusEl.textContent = status;
   statusEl.dataset.state = status;
   noteEl.textContent = note;
+  renderBoard(creating || meta?.owner !== 'dashboard' ? null : (meta?.team ?? null));
   input.disabled = locked;
   attachBtn.disabled = locked;
   sendBtn.disabled = locked;
@@ -710,6 +855,31 @@ function renderApproval(ask: PermissionAsk): HTMLElement {
   return card;
 }
 
+function renderChatter(ask: PermissionAsk, count: number): HTMLElement {
+  const card = el('div', 'ask ask-approval');
+  const who = ask.member ?? 'MD';
+  const head = el('div', 'ask-head');
+  const name = el('span', 'ask-who');
+  name.append(
+    el('span', 'ask-name', who),
+    el('span', 'ask-what', '팀원끼리 대화가 길어지고 있어요'),
+  );
+  head.append(el('span', 'ask-avatar', Array.from(who)[0] ?? '?'), name);
+  const body = el('div', 'chatter-body');
+  body.append(
+    el('p', '', `대표님 말씀 없이 팀원끼리 메시지를 ${count}번 주고받았어요.`),
+    el('p', '', '같은 이야기를 맴도는 중일 수 있어요. 계속 두면 비용이 늘어요.'),
+  );
+  const goOn = keyedButton('btn btn-primary', '계속하게 두기', '1');
+  const stop = keyedButton('btn btn-deny', '멈추고 정리해서 보고받기', '2');
+  goOn.addEventListener('click', () => void answer(ask.requestId, true, card));
+  stop.addEventListener('click', () => void answer(ask.requestId, false, card));
+  const actions = el('div', 'ask-actions');
+  actions.append(goOn, stop);
+  card.append(head, body, actions);
+  return card;
+}
+
 function describePermission(p: PlanPermission): [string, string] {
   if (p.kind === 'files') return ['파일 쓰기·고치기', `${p.scope} 폴더 안`];
   if (p.kind === 'command') return ['명령 실행', `"${p.scope}"로 시작하는 명령`];
@@ -788,7 +958,9 @@ function renderAsks(asks: PermissionAsk[]): void {
         ? renderQuestion(ask, ask.questions)
         : ask.plan
           ? renderPlan(ask, ask.plan)
-          : renderApproval(ask),
+          : ask.chatter
+            ? renderChatter(ask, ask.chatter)
+            : renderApproval(ask),
     ),
   );
 }

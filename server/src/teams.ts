@@ -25,6 +25,7 @@ const TEMPLATES_FILE = 'bitteul-team-templates.json';
 export const TEAM_MODELS = ['opus', 'sonnet', 'haiku'] as const;
 export const MAX_TEAM_MEMBERS = 8;
 export const MAX_TEAM_NAME = 40;
+export const MAX_TEAM_BUDGET_USD = 1000;
 const MEMBER_KEY = /^[a-z][a-z0-9-]{0,30}$/;
 
 export const TEAM_ENV = { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' } as const;
@@ -48,12 +49,15 @@ export interface TeamRoster {
   cwd?: string;
   /** Seats of the team room, MD first, then members in roster order. */
   seats?: number[];
+  /** Spend cap in dollars for one run of the team; the SDK stops the session at it. */
+  budgetUsd?: number;
 }
 
 export const DEFAULT_TEAM: TeamRoster = {
   name: '기본 팀',
   leadLabel: 'MD',
   leadModel: 'opus',
+  budgetUsd: 5,
   members: [
     {
       key: 'planner',
@@ -103,6 +107,12 @@ export function rosterProblem(team: TeamRoster): string | null {
     }
     if (!isDir) return `work folder not found: ${team.cwd}`;
   }
+  if (
+    team.budgetUsd !== undefined &&
+    !(team.budgetUsd > 0 && team.budgetUsd <= MAX_TEAM_BUDGET_USD)
+  ) {
+    return `budget must be more than 0 and at most ${MAX_TEAM_BUDGET_USD} dollars`;
+  }
   return null;
 }
 
@@ -150,6 +160,8 @@ interface TeamsFile {
   sessions: Record<string, TeamRoster>;
   /** Approved plans, so a resumed team keeps what the user already allowed. */
   plans: Record<string, TeamPlan>;
+  /** The SDK's running cost per session; a resumed session's total starts from it. */
+  costs: Record<string, number>;
 }
 
 function filePath(name: string): string {
@@ -171,9 +183,13 @@ export class TeamRegistry {
   }
 
   private static read(file: string): TeamsFile {
-    if (!fs.existsSync(file)) return { sessions: {}, plans: {} };
+    if (!fs.existsSync(file)) return { sessions: {}, plans: {}, costs: {} };
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<TeamsFile>;
-    return { sessions: parsed.sessions ?? {}, plans: parsed.plans ?? {} };
+    return {
+      sessions: parsed.sessions ?? {},
+      plans: parsed.plans ?? {},
+      costs: parsed.costs ?? {},
+    };
   }
 
   rosterOf(sessionId: string): TeamRoster | undefined {
@@ -191,6 +207,15 @@ export class TeamRegistry {
 
   rememberPlan(sessionId: string, plan: TeamPlan): void {
     this.data.plans[sessionId] = plan;
+    writeAtomic(this.file, this.data);
+  }
+
+  costOf(sessionId: string): number {
+    return this.data.costs[sessionId] ?? 0;
+  }
+
+  rememberCost(sessionId: string, costUsd: number): void {
+    this.data.costs[sessionId] = costUsd;
     writeAtomic(this.file, this.data);
   }
 }
