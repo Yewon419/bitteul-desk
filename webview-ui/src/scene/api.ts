@@ -114,13 +114,74 @@ export async function postJson<T>(
   }
 }
 
-/** `seat`: for a new hire, the empty desk they were hired from. */
-export function chatUrl(token: string, sessionId: string | null, seat?: number): string {
+/** `seat`: for a new hire, the empty desk they were hired from. `team`: a saved team draft. */
+export function chatUrl(
+  token: string,
+  sessionId: string | null,
+  seat?: number,
+  team?: string,
+): string {
   const params = new URLSearchParams({ token });
   if (sessionId) params.set('session', sessionId);
   else params.set('new', '1');
   if (!sessionId && seat !== undefined) params.set('seat', String(seat));
+  if (!sessionId && team) params.set('team', team);
   return `./chat.html?${params.toString()}`;
+}
+
+// ── Teams ─────────────────────────────────────────────────────
+
+export interface TeamMember {
+  key: string;
+  label: string;
+  role: string;
+  model: string;
+}
+
+export interface TeamRoster {
+  name: string;
+  leadLabel: string;
+  leadModel: string;
+  members: TeamMember[];
+  cwd?: string;
+}
+
+export interface TeamTemplatesResponse {
+  defaultTeam: TeamRoster;
+  templates: TeamRoster[];
+}
+
+/** A team the office composed, waiting in its chat window for the first brief. */
+export interface TeamDraft {
+  team: TeamRoster;
+  seats: number[];
+  rooms: number[];
+}
+
+const TEAM_DRAFT_KEY = 'bitteul-team-draft:';
+
+/** Hand a composed team to the chat window that will start it; returns the draft id. */
+export function saveTeamDraft(draft: TeamDraft): string {
+  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  window.localStorage.setItem(TEAM_DRAFT_KEY + id, JSON.stringify(draft));
+  return id;
+}
+
+export function readTeamDraft(id: string): TeamDraft | null {
+  try {
+    const raw = window.localStorage.getItem(TEAM_DRAFT_KEY + id);
+    return raw ? (JSON.parse(raw) as TeamDraft) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function dropTeamDraft(id: string): void {
+  try {
+    window.localStorage.removeItem(TEAM_DRAFT_KEY + id);
+  } catch {
+    // nothing to clean
+  }
 }
 
 // ── One chat window per session ──────────────────────────────
@@ -206,6 +267,7 @@ export function openChatWindow(
   token: string,
   sessionId: string | null,
   seat?: number,
+  team?: string,
 ): ChatOpenResult {
   if (sessionId && chatIsOpen(sessionId)) {
     const bc = channel();
@@ -219,7 +281,7 @@ export function openChatWindow(
   const width = Math.min(760, window.screen.availWidth - 40);
   const height = Math.min(900, window.screen.availHeight - 100);
   const win = window.open(
-    chatUrl(token, sessionId, seat),
+    chatUrl(token, sessionId, seat, team),
     name,
     `popup,width=${width},height=${height}`,
   );

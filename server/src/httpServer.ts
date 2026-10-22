@@ -40,6 +40,15 @@ import {
 import { describeMedia, MAX_PREVIEW_BYTES, mediaType } from './mediaPreview.js';
 import { type PhoneLink, qrSvg } from './phoneAccess.js';
 import { MAX_ROOM_TITLE, SceneState } from './sceneState.js';
+import {
+  DEFAULT_TEAM,
+  MAX_TEAM_MEMBERS,
+  MAX_TEAM_NAME,
+  rosterProblem,
+  TEAM_MODELS,
+  type TeamRoster,
+  TeamTemplates,
+} from './teams.js';
 import { openSessionInTerminal } from './terminalLaunch.js';
 import type { AgentState } from './types.js';
 import {
@@ -206,6 +215,17 @@ function registerDashboardRoutes(
   const auth = { preHandler: bearerAuth(options.token) };
   const sessionOf = (agent: AgentState): string => path.basename(agent.jsonlFile, '.jsonl');
   const uploads = options.uploadsDir ?? uploadsRoot(os.homedir());
+  const templates = new TeamTemplates();
+  if (managed && scene) {
+    // A member takes the desk its team kept for it, unless someone still working sits there.
+    managed.memberJoined = (memberSessionId, seat) => {
+      if (scene.seatOf(memberSessionId) !== undefined) return;
+      const holder = scene.holderOf(seat);
+      const live = new Set([...options.store.values()].map(sessionOf));
+      if (holder && holder !== memberSessionId && live.has(holder)) return;
+      scene.moveSeats([{ sessionId: memberSessionId, seat }]);
+    };
+  }
 
   /** Text plus attachments as one user turn; only files this server saved may be attached. */
   const turnContent = (
@@ -414,34 +434,70 @@ function registerDashboardRoutes(
   );
 
   // A team: the new session is the MD, the text is the brief, and the members join as it delegates.
+  // `seats` are the team's desks (MD first); `rooms` are the rooms whose signs take the team name.
   app.post<{
     Body: {
       text: string;
-      seat?: number;
+      team: TeamRoster;
+      seats?: number[];
+      rooms?: number[];
       mode?: DashboardMode;
-      model?: string | null;
       attachments?: Attachment[];
     };
   }>(
     '/api/dashboard/teams',
-    { ...auth, schema: { body: SESSION_BODY } },
+    { ...auth, schema: { body: TEAM_START_BODY } },
     async (request, reply) => {
-      const { text, mode, model, attachments } = request.body;
+      const { text, mode, attachments, seats, rooms } = request.body;
       const content = turnContent(text, attachments);
       if (typeof content === 'object' && 'error' in content) {
         return reply.code(400).send(content);
       }
       if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
+      const team: TeamRoster = { ...request.body.team, ...(seats?.length ? { seats } : {}) };
       return sendOrFail(reply, async () => {
-        const sessionId = await managed.startTeam(content, {
-          ...(mode ? { mode } : {}),
-          ...(model !== undefined && model !== null ? { model } : {}),
-        });
-        if (request.body.seat !== undefined) {
-          scene?.moveSeats([{ sessionId, seat: request.body.seat }]);
-        }
+        const sessionId = await managed.startTeam(team, content, mode ? { mode } : {});
+        if (seats?.length) scene?.moveSeats([{ sessionId, seat: seats[0] }]);
+        for (const room of rooms ?? []) scene?.setRoomTitle(room, team.name);
         return { sessionId };
       });
+    },
+  );
+
+  app.get('/api/dashboard/team-templates', auth, async () => ({
+    defaultTeam: DEFAULT_TEAM,
+    templates: templates.list(),
+  }));
+
+  app.post<{ Body: { team: TeamRoster } }>(
+    '/api/dashboard/team-templates',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { team: TEAM_SCHEMA },
+          required: ['team'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const problem = rosterProblem(request.body.team);
+      if (problem) return reply.code(400).send({ error: problem });
+      templates.save(request.body.team);
+      return { ok: true };
+    },
+  );
+
+  app.delete<{ Params: { name: string } }>(
+    '/api/dashboard/team-templates/:name',
+    auth,
+    async (request, reply) => {
+      if (!templates.remove(request.params.name)) {
+        return reply.code(404).send({ error: `no template ${request.params.name}` });
+      }
+      return { ok: true };
     },
   );
 
@@ -788,6 +844,56 @@ const SESSION_BODY = {
     model: { type: ['string', 'null'], maxLength: 100 },
   },
   required: ['text'],
+} as const;
+
+const TEAM_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', minLength: 1, maxLength: MAX_TEAM_NAME },
+    leadLabel: { type: 'string', minLength: 1, maxLength: 20 },
+    leadModel: { type: 'string', enum: TEAM_MODELS },
+    cwd: { type: 'string', minLength: 1, maxLength: 1000 },
+    members: {
+      type: 'array',
+      minItems: 1,
+      maxItems: MAX_TEAM_MEMBERS,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          key: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,30}$' },
+          label: { type: 'string', minLength: 1, maxLength: 20 },
+          role: { type: 'string', minLength: 1, maxLength: 500 },
+          model: { type: 'string', enum: TEAM_MODELS },
+        },
+        required: ['key', 'label', 'role', 'model'],
+      },
+    },
+  },
+  required: ['name', 'leadLabel', 'leadModel', 'members'],
+} as const;
+
+const TEAM_START_BODY = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    text: { type: 'string', maxLength: 20000 },
+    attachments: ATTACHMENTS_SCHEMA,
+    team: TEAM_SCHEMA,
+    seats: {
+      type: 'array',
+      maxItems: MAX_TEAM_MEMBERS + 1,
+      items: { type: 'integer', minimum: 0, maximum: 999 },
+    },
+    rooms: {
+      type: 'array',
+      maxItems: MAX_TEAM_MEMBERS + 1,
+      items: { type: 'integer', minimum: 0, maximum: 999 },
+    },
+    mode: { type: 'string', enum: ['auto', 'default', 'acceptEdits', 'plan'] },
+  },
+  required: ['text', 'team'],
 } as const;
 
 const AGENT_ID_PARAMS = {

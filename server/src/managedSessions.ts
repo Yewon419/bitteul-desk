@@ -22,8 +22,8 @@ import * as os from 'os';
 import * as path from 'path';
 
 import {
-  DEFAULT_TEAM,
   leadInstructions,
+  rosterProblem,
   TEAM_ENV,
   teamAgents,
   TeamRegistry,
@@ -259,6 +259,9 @@ export class ManagedSessions {
     private readonly log: (msg: string, extra?: Record<string, unknown>) => void,
     private readonly teams: TeamRegistry = new TeamRegistry(),
   ) {}
+
+  /** Called the first time a member starts working, with the seat the team kept for it. */
+  memberJoined: ((memberSessionId: string, seat: number) => void) | null = null;
 
   /** The live team session a member transcript ('agent-<id>') belongs to. */
   private teamOfMember(sessionId: string): Managed | undefined {
@@ -561,8 +564,13 @@ export class ManagedSessions {
   }
 
   /** Start a team: this session is the MD, and the brief is its first message. */
-  async startTeam(content: TurnContent, settings?: Partial<SessionSettings>): Promise<string> {
-    const team = DEFAULT_TEAM;
+  async startTeam(
+    team: TeamRoster,
+    content: TurnContent,
+    settings?: Partial<SessionSettings>,
+  ): Promise<string> {
+    const problem = rosterProblem(team);
+    if (problem) throw new DashboardSessionError(problem, 400);
     return this.open({ team }, content, {
       ...this.settingsFor(''),
       model: team.leadModel,
@@ -690,7 +698,7 @@ export class ManagedSessions {
       prompt,
       options: {
         pathToClaudeCodeExecutable: this.claudeExe,
-        cwd: this.cwd,
+        cwd: team?.cwd ?? this.cwd,
         permissionMode: settings.mode,
         promptSuggestions: true,
         ...(settings.model ? { model: settings.model } : {}),
@@ -752,7 +760,12 @@ export class ManagedSessions {
               const s = this.sessions.get(sessionId);
               const key = m.subagent_type;
               // A member woken by SendMessage starts again under the same task id.
-              if (s?.team && key && s.team.members.some((mem) => mem.key === key)) {
+              const index = s?.team?.members.findIndex((mem) => mem.key === key) ?? -1;
+              if (s?.team && key && index >= 0) {
+                const seat = s.team.seats?.[index + 1];
+                if (!s.members.has(m.task_id) && seat !== undefined) {
+                  this.memberJoined?.(MEMBER_SESSION_PREFIX + m.task_id, seat);
+                }
                 s.members.set(m.task_id, key);
                 s.running.add(m.task_id);
                 this.log('team member working', { sessionId, agentId: m.task_id, member: key });

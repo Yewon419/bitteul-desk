@@ -19,6 +19,12 @@ import * as path from 'path';
 import { LAYOUT_FILE_DIR } from './constants.js';
 
 const FILE_NAME = 'bitteul-teams.json';
+const TEMPLATES_FILE = 'bitteul-team-templates.json';
+
+export const TEAM_MODELS = ['opus', 'sonnet', 'haiku'] as const;
+export const MAX_TEAM_MEMBERS = 8;
+export const MAX_TEAM_NAME = 40;
+const MEMBER_KEY = /^[a-z][a-z0-9-]{0,30}$/;
 
 export const TEAM_ENV = { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' } as const;
 
@@ -32,35 +38,72 @@ export interface TeamMember {
 }
 
 export interface TeamRoster {
+  /** Written on the team room's sign. */
+  name: string;
   leadLabel: string;
   leadModel: string;
   members: TeamMember[];
+  /** Work folder; absent means the folder the server runs in. */
+  cwd?: string;
+  /** Seats of the team room, MD first, then members in roster order. */
+  seats?: number[];
 }
 
 export const DEFAULT_TEAM: TeamRoster = {
+  name: '기본 팀',
   leadLabel: 'MD',
   leadModel: 'opus',
   members: [
     {
       key: 'planner',
       label: '기획자',
-      role: 'Turns the brief into a concrete plan: goals, scope, user flow, and the task list for the designer and the developer.',
+      role: '브리프를 구체적인 계획으로 바꿔요: 목표, 범위, 사용자 흐름, 디자이너와 개발자가 할 일 목록.',
       model: 'opus',
     },
     {
       key: 'designer',
       label: '디자이너',
-      role: 'Designs the screens, layout, visual style and copy the plan calls for, and hands the developer specs precise enough to build from.',
+      role: '계획에 맞춰 화면 구성, 레이아웃, 시각 스타일, 문구를 디자인하고 개발자가 바로 만들 수 있는 명세를 넘겨요.',
       model: 'sonnet',
     },
     {
       key: 'developer',
       label: '개발자',
-      role: 'Builds what the plan and the design specify, runs it, and fixes what fails.',
+      role: '계획과 디자인대로 만들고, 실행해 보고, 안 되는 곳을 고쳐요.',
       model: 'sonnet',
     },
   ],
 };
+
+/** Why a roster cannot run, or null when it can. */
+export function rosterProblem(team: TeamRoster): string | null {
+  if (!team.name.trim() || team.name.length > MAX_TEAM_NAME)
+    return 'team name is empty or too long';
+  if (!team.leadLabel.trim()) return 'the MD needs a name';
+  if (team.members.length === 0) return 'a team needs at least one member';
+  if (team.members.length > MAX_TEAM_MEMBERS) return `at most ${MAX_TEAM_MEMBERS} members`;
+  const models: readonly string[] = TEAM_MODELS;
+  if (!models.includes(team.leadModel)) return `unknown model ${team.leadModel}`;
+  const keys = new Set<string>();
+  for (const m of team.members) {
+    if (!MEMBER_KEY.test(m.key)) return `invalid member key ${m.key}`;
+    if (keys.has(m.key)) return `duplicate member key ${m.key}`;
+    keys.add(m.key);
+    if (!m.label.trim()) return `member ${m.key} needs a name`;
+    if (!m.role.trim()) return `member ${m.key} needs a role`;
+    if (!models.includes(m.model)) return `unknown model ${m.model}`;
+  }
+  if (team.cwd !== undefined) {
+    let isDir = false;
+    try {
+      isDir = path.isAbsolute(team.cwd) && fs.statSync(team.cwd).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) return `work folder not found: ${team.cwd}`;
+  }
+  return null;
+}
 
 function roster(team: TeamRoster): string {
   return team.members.map((m) => `- ${m.key} (${m.label}): ${m.role}`).join('\n');
@@ -104,14 +147,21 @@ interface TeamsFile {
   sessions: Record<string, TeamRoster>;
 }
 
-function filePath(): string {
-  return path.join(os.homedir(), LAYOUT_FILE_DIR, FILE_NAME);
+function filePath(name: string): string {
+  return path.join(os.homedir(), LAYOUT_FILE_DIR, name);
+}
+
+function writeAtomic(file: string, data: object): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tmp, file);
 }
 
 export class TeamRegistry {
   private data: TeamsFile;
 
-  constructor(private readonly file: string = filePath()) {
+  constructor(private readonly file: string = filePath(FILE_NAME)) {
     this.data = TeamRegistry.read(file);
   }
 
@@ -121,19 +171,42 @@ export class TeamRegistry {
     return { sessions: parsed.sessions ?? {} };
   }
 
-  private save(): void {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf-8');
-    fs.renameSync(tmp, this.file);
-  }
-
   rosterOf(sessionId: string): TeamRoster | undefined {
     return this.data.sessions[sessionId];
   }
 
   remember(sessionId: string, team: TeamRoster): void {
     this.data.sessions[sessionId] = team;
-    this.save();
+    writeAtomic(this.file, this.data);
+  }
+}
+
+/** Team setups the user saved to start again later, keyed by team name. */
+export class TeamTemplates {
+  private templates: TeamRoster[];
+
+  constructor(private readonly file: string = filePath(TEMPLATES_FILE)) {
+    this.templates = fs.existsSync(file)
+      ? ((JSON.parse(fs.readFileSync(file, 'utf-8')) as { templates?: TeamRoster[] }).templates ??
+        [])
+      : [];
+  }
+
+  list(): TeamRoster[] {
+    return this.templates.map((t) => ({ ...t, members: t.members.map((m) => ({ ...m })) }));
+  }
+
+  save(team: TeamRoster): void {
+    const { seats: _seats, ...template } = team;
+    this.templates = [...this.templates.filter((t) => t.name !== team.name), template];
+    writeAtomic(this.file, { templates: this.templates });
+  }
+
+  remove(name: string): boolean {
+    const before = this.templates.length;
+    this.templates = this.templates.filter((t) => t.name !== name);
+    if (this.templates.length === before) return false;
+    writeAtomic(this.file, { templates: this.templates });
+    return true;
   }
 }

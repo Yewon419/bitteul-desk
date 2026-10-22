@@ -12,11 +12,13 @@ import {
   announceChatWindow,
   type ConversationEntry,
   type ConversationResponse,
+  dropTeamDraft,
   fetchJson,
   type MediaRef,
   type PermissionAsk,
   postJson,
   type Question,
+  readTeamDraft,
   takeChatDraft,
 } from '../scene/api.js';
 import {
@@ -47,6 +49,9 @@ let sessionId = params.get('session');
 let creating = params.get('new') === '1' && !sessionId;
 /** A new hire from an empty desk in the office sits at that desk. */
 const hireSeat = Number.parseInt(params.get('seat') ?? '', 10);
+/** A team the office composed: the first message is its brief and starts the MD. */
+const teamDraftId = creating ? params.get('team') : null;
+const teamDraft = teamDraftId ? readTeamDraft(teamDraftId) : null;
 
 function byId<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -466,7 +471,11 @@ function renderStatus(): void {
   let status: string;
   let note = '';
   let locked = sending;
-  if (creating) {
+  if (creating && teamDraft) {
+    const { team } = teamDraft;
+    status = '새 팀';
+    note = `${team.name}: ${team.leadLabel}(팀장), ${team.members.map((m) => m.label).join(', ')}. 첫 브리프를 보내면 팀장이 팀원에게 일을 나눠요.`;
+  } else if (creating) {
     status = '새 직원';
     note = '첫 업무 지시를 보내면 새 직원이 출근합니다.';
   } else if (!meta) {
@@ -523,7 +532,7 @@ function renderStatus(): void {
   input.disabled = locked;
   attachBtn.disabled = locked;
   sendBtn.disabled = locked;
-  sendBtn.textContent = creating ? '출근시키기' : '보내기';
+  sendBtn.textContent = creating ? (teamDraft ? '팀 시작' : '출근시키기') : '보내기';
   renderAsks(meta?.pending ?? []);
 }
 
@@ -764,19 +773,29 @@ async function send(): Promise<void> {
   try {
     const attachments = await uploadPending();
     if (creating) {
-      const res = await postJson<{ sessionId: string }>('./api/dashboard/sessions', token, {
-        text,
-        attachments,
-        ...(Number.isFinite(hireSeat) ? { seat: hireSeat } : {}),
-        mode: draftSettings.mode,
-        model: draftSettings.model,
-      });
+      const res = teamDraft
+        ? await postJson<{ sessionId: string }>('./api/dashboard/teams', token, {
+            text,
+            attachments,
+            team: teamDraft.team,
+            seats: teamDraft.seats,
+            rooms: teamDraft.rooms,
+            mode: draftSettings.mode,
+          })
+        : await postJson<{ sessionId: string }>('./api/dashboard/sessions', token, {
+            text,
+            attachments,
+            ...(Number.isFinite(hireSeat) ? { seat: hireSeat } : {}),
+            mode: draftSettings.mode,
+            model: draftSettings.model,
+          });
+      if (teamDraftId) dropTeamDraft(teamDraftId);
       sessionId = res.sessionId;
       creating = false;
       announceChatWindow(sessionId, () => input.value);
       const next = new URLSearchParams({ token, session: sessionId });
       window.history.replaceState(null, '', `?${next.toString()}`);
-      setTitle('새 직원 출근 중…');
+      setTitle(teamDraft ? `${teamDraft.team.name} 출근 중…` : '새 직원 출근 중…');
     } else if (meta) {
       // No retry: the server may have taken the turn even when the answer never arrived.
       await postJson(
@@ -903,7 +922,8 @@ function renderControls(): void {
   lowDataWrap.hidden = !touch;
   lowDataBox.checked = lowDataOn();
   modeWrap.hidden = !usable;
-  modelWrap.hidden = !usable;
+  // A new team's models are set per member in the team dialog.
+  modelWrap.hidden = !usable || (creating && !!teamDraft);
   if (controlsEl.hidden || !usable) return;
   const { mode, model } = currentSettings();
   if (modeSelect.options.length === 0) {
@@ -1559,7 +1579,9 @@ if (!token) {
     input.value = takeChatDraft(sessionId) ?? '';
     announceChatWindow(sessionId, () => input.value);
   }
-  setTitle(creating ? '새 직원 부르기' : '불러오는 중…');
+  setTitle(
+    creating ? (teamDraft ? `새 팀: ${teamDraft.team.name}` : '새 직원 부르기') : '불러오는 중…',
+  );
   renderStatus();
   void loadUserName()
     .then(() => pollAgents())

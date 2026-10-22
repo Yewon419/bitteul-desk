@@ -89,6 +89,7 @@ import {
 } from './idle.js';
 import { READING_TOOLS, toolLabel } from './labels.js';
 import { dropMoves, planSeats, type SeatPlan } from './seating.js';
+import { initTeamModal, type TeamRoomPick } from './teamModal.js';
 
 type Point = [number, number];
 
@@ -714,14 +715,14 @@ function hidePairing(): void {
   if (modal) modal.hidden = true;
 }
 
-function openChat(token: string, sessionId: string | null, seat?: number): void {
+function openChat(token: string, sessionId: string | null, seat?: number, team?: string): void {
   if (window.matchMedia(SAME_TAB_CHAT_MEDIA).matches) {
-    window.location.assign(chatUrl(token, sessionId, seat));
+    window.location.assign(chatUrl(token, sessionId, seat, team));
     return;
   }
-  if (openChatWindow(token, sessionId, seat) === 'opened') return;
+  if (openChatWindow(token, sessionId, seat, team) === 'opened') return;
   showToast('브라우저가 대화 창(팝업)을 막았어요.', {
-    href: chatUrl(token, sessionId, seat),
+    href: chatUrl(token, sessionId, seat, team),
     label: '여기를 눌러 열기',
   });
 }
@@ -832,6 +833,32 @@ async function start(): Promise<void> {
   const lastSeat = new Map<number, number>();
   const token = new URLSearchParams(window.location.search).get('token');
   const hire = document.getElementById('hire');
+  const teamBtn = document.getElementById('team');
+
+  /** Whole rooms for a team: the first run of empty rooms that fits, untitled ones first. */
+  const pickTeamRooms = (people: number): TeamRoomPick => {
+    const count = Math.ceil(people / perRoom);
+    const empty = (room: number): boolean =>
+      Array.from({ length: perRoom }, (_, d) => room * perRoom + d).every(
+        (seat) => !plan.agentAt.has(seat),
+      );
+    // Rooms past the last floor are empty by definition; the office grows a floor for them.
+    const limit = (floors + 1) * layout.rooms + count;
+    let fallback: number | null = null;
+    for (let first = 0; first < limit; first++) {
+      const rooms = Array.from({ length: count }, (_, i) => first + i);
+      if (!rooms.every(empty)) continue;
+      if (rooms.every((r) => !roomTitles.has(r))) {
+        fallback = first;
+        break;
+      }
+      fallback ??= first;
+    }
+    const first = fallback ?? floors * layout.rooms;
+    const rooms = Array.from({ length: count }, (_, i) => first + i);
+    const seats = Array.from({ length: people }, (_, i) => first * perRoom + i);
+    return { seats, rooms };
+  };
 
   const pollScene = async (): Promise<void> => {
     try {
@@ -860,6 +887,7 @@ async function start(): Promise<void> {
         metas.clear();
         data.agents.forEach((m) => metas.set(m.id, m));
         if (hire) hire.hidden = !data.canReply;
+        if (teamBtn) teamBtn.hidden = !data.canReply;
         pollFailures = 0;
         // Connection is back: take down the "can't reach the server" notice on its own.
         const toast = document.getElementById('toast');
@@ -885,6 +913,12 @@ async function start(): Promise<void> {
     void pollAgents();
     window.setInterval(() => void pollAgents(), TITLE_POLL_MS);
     hire?.addEventListener('click', () => openChat(token, null));
+    const openTeam = initTeamModal({
+      token,
+      pickRoom: pickTeamRooms,
+      open: (draftId, seat) => openChat(token, null, seat, draftId),
+    });
+    teamBtn?.addEventListener('click', openTeam);
     scopeEnabled = true;
     renderScope();
     document.getElementById('scope')?.addEventListener('click', toggleScope);
