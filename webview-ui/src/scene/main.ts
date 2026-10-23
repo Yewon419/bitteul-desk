@@ -96,6 +96,7 @@ import {
   stepBody,
 } from './idle.js';
 import { READING_TOOLS, toolLabel } from './labels.js';
+import { pushIsOn, pushSupport, reportSeen, turnPushOff, turnPushOn } from './push.js';
 import { dropMoves, planSeats, type SeatPlan } from './seating.js';
 import { initTeamModal, type TeamRoomPick } from './teamModal.js';
 import {
@@ -773,6 +774,55 @@ function hidePairing(): void {
   if (modal) modal.hidden = true;
 }
 
+/** The toolbar's alert switch: on this phone (or browser), push the things that wait on you. */
+function setupPush(token: string): void {
+  const btn = document.getElementById('push');
+  const support = pushSupport();
+  if (!btn || support === 'unsupported') return;
+  const render = (on: boolean): void => {
+    btn.dataset.on = String(on);
+    btn.textContent = on ? '알림 켜짐' : '알림 켜기';
+  };
+  btn.hidden = false;
+  render(false);
+  if (support === 'ready') {
+    pushIsOn()
+      .then(render)
+      .catch((err: unknown) => console.warn('[Webview] push state unknown', err));
+  }
+  let busy = false;
+  btn.addEventListener('click', () => {
+    if (support === 'install') {
+      showToast('공유 버튼에서 "홈 화면에 추가"로 연 빛뜰 데스크에서 알림을 켤 수 있어요.');
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    const on = btn.dataset.on === 'true';
+    const action = on
+      ? turnPushOff(token).then(() => {
+          render(false);
+          showToast('이 기기 알림을 껐어요.');
+        })
+      : turnPushOn(token).then((result) => {
+          render(result === 'on');
+          showToast(
+            result === 'on'
+              ? '이 기기로 승인 요청과 질문을 알려 드려요.'
+              : '알림이 막혀 있어요. 설정에서 빛뜰 데스크 알림을 허용해 주세요.',
+          );
+        });
+    action
+      .catch((err: unknown) => {
+        console.error('[Webview] push switch failed', err);
+        showToast(`알림 설정에 실패했어요: ${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        busy = false;
+      });
+  });
+}
+
 function openChat(token: string, sessionId: string | null, seat?: number, team?: string): void {
   if (window.matchMedia(SAME_TAB_CHAT_MEDIA).matches) {
     window.location.assign(chatUrl(token, sessionId, seat, team));
@@ -992,6 +1042,8 @@ async function start(): Promise<void> {
       pair.hidden = window.matchMedia(SAME_TAB_CHAT_MEDIA).matches;
       pair.addEventListener('click', () => void showPairing(token));
     }
+    setupPush(token);
+    reportSeen(token);
     document.getElementById('pair-close')?.addEventListener('click', hidePairing);
     document.getElementById('pair-modal')?.addEventListener('click', (ev) => {
       if (ev.target === ev.currentTarget) hidePairing();

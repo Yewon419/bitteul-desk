@@ -1,0 +1,8 @@
+{
+  "name": "빛뜰 데스크",
+  "short_name": "빛뜰 데스크",
+  "display": "standalone",
+  "background_color": "#3b4c65",
+  "theme_color": "#3b4c65",
+  "icons": [{ "src": "./scene/app-icon.png", "sizes": "180x180", "type": "image/png" }]
+}

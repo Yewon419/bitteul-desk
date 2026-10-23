@@ -8,6 +8,7 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="빛뜰 데스크" />
+    <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" href="./scene/app-icon.png" />
     <link rel="icon" type="image/png" href="./scene/app-icon.png" />
     <title>빛뜰 데스크</title>
@@ -78,6 +79,12 @@
       }
       #pair {
         background: #bfe0f5;
+      }
+      #push {
+        background: #ffffff;
+      }
+      #push[data-on='true'] {
+        background: #c8ecd2;
       }
       #team {
         background: #c8ecd2;
@@ -739,6 +746,7 @@
       <button id="hire" class="tool-btn" type="button" hidden>+ 새 직원</button>
       <button id="team" class="tool-btn" type="button" hidden>+ 새 팀</button>
       <button id="pair" class="tool-btn" type="button" hidden>폰 연결</button>
+      <button id="push" class="tool-btn" type="button" hidden>알림 켜기</button>
       <button
         id="scope"
         class="tool-btn"

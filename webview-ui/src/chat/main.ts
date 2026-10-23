@@ -27,6 +27,7 @@ import {
   type TeamStatus,
   type WorkLimit,
 } from '../scene/api.js';
+import { reportSeen } from '../scene/push.js';
 import {
   type CatalogCommand,
   type CatalogModel,
@@ -1854,5 +1855,6 @@ if (!token) {
     .then(() => pollConversation());
   window.setInterval(() => void pollAgents(), AGENTS_POLL_MS);
   window.setInterval(() => void pollConversation(), CONVERSATION_POLL_MS);
+  reportSeen(token);
   input.focus();
 }
