@@ -146,6 +146,7 @@ async function buildCli() {
       '@anthropic-ai/claude-agent-sdk',
       // The SDK reads tool schemas with its own zod; one copy keeps them the same kind.
       'zod',
+      'web-push',
     ],
     define: versionDefine,
     logLevel: 'silent',

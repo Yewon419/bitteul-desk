@@ -331,9 +331,15 @@ export function parseQuestions(input: Record<string, unknown>): Question[] | nul
   return questions;
 }
 
+/** Something that now waits on the user, raised so the phone can be told. */
+export type ManagedAlert =
+  | { kind: 'ask'; ask: PermissionAsk }
+  | { kind: 'budget'; sessionId: string; member: string; costUsd: number; budgetUsd: number };
+
 export class ManagedSessions {
   private readonly sessions = new Map<string, Managed>();
   private readonly pending = new Map<string, Pending>();
+  private alertListener: ((alert: ManagedAlert) => void) | null = null;
   private liveCache: { at: number; ids: Set<string> } | null = null;
   /** Account usage limits by kind, as the CLI last reported them. Shared by every session. */
   private readonly rateLimits = new Map<string, SDKRateLimitInfo>();
@@ -359,6 +365,17 @@ export class ManagedSessions {
     if (!sessionId.startsWith(MEMBER_SESSION_PREFIX)) return undefined;
     const agentId = sessionId.slice(MEMBER_SESSION_PREFIX.length);
     return [...this.sessions.values()].find((s) => s.members.has(agentId));
+  }
+
+  onAlert(listener: (alert: ManagedAlert) => void): void {
+    this.alertListener = listener;
+  }
+
+  private raise(requestId: string): void {
+    const p = this.pending.get(requestId);
+    if (!p || !this.alertListener) return;
+    const { input: _input, resolve: _resolve, ...ask } = p;
+    this.alertListener({ kind: 'ask', ask });
   }
 
   owner(sessionId: string, liveTerminalIds: Set<string>): SessionOwner {
@@ -902,6 +919,7 @@ export class ManagedSessions {
           toolName,
           ...(agentID ? { agentId: agentID, member } : {}),
         });
+        this.raise(requestId);
       });
     // The MD hands in its plan through this tool; the call waits until the user decides.
     const submitPlan = (plan: TeamPlan): Promise<PlanDecision> =>
@@ -937,6 +955,7 @@ export class ManagedSessions {
           },
         });
         this.log('team plan submitted', { requestId, sessionId });
+        this.raise(requestId);
       });
     // Members can keep messaging each other without the user; past a limit, ask whether to go on.
     const chatterGuard: HookCallback = async (_input, _toolUseId, { signal }) => {
@@ -961,6 +980,7 @@ export class ManagedSessions {
           if (this.pending.delete(requestId)) decide(false);
         });
         this.log('team chatter paused for the user', { requestId, sessionId, count });
+        this.raise(requestId);
       }).finally(() => {
         s.chatter = 0;
         s.chatterAsk = null;
@@ -1139,6 +1159,13 @@ export class ManagedSessions {
                     sessionId,
                     costUsd: m.total_cost_usd,
                     budgetUsd: s.team.budgetUsd,
+                  });
+                  this.alertListener?.({
+                    kind: 'budget',
+                    sessionId,
+                    member: s.team.leadLabel,
+                    costUsd: m.total_cost_usd,
+                    budgetUsd: s.team.budgetUsd ?? 0,
                   });
                 }
               }

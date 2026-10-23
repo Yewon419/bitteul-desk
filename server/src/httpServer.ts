@@ -39,6 +39,7 @@ import {
 } from './managedSessions.js';
 import { describeMedia, MAX_PREVIEW_BYTES, mediaType } from './mediaPreview.js';
 import { type PhoneLink, qrSvg } from './phoneAccess.js';
+import { PushNotifier } from './pushNotifier.js';
 import { MAX_ROOM_TITLE, SceneState } from './sceneState.js';
 import {
   DEFAULT_TEAM,
@@ -217,6 +218,18 @@ function registerDashboardRoutes(
   const sessionOf = (agent: AgentState): string => path.basename(agent.jsonlFile, '.jsonl');
   const uploads = options.uploadsDir ?? uploadsRoot(os.homedir());
   const templates = new TeamTemplates();
+  const titleOf = (sessionId: string): string | null => {
+    for (const agent of options.store.values()) {
+      if (sessionOf(agent) !== sessionId) continue;
+      try {
+        return conversations.get(agent.jsonlFile).title;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+  registerPushRoutes(app, options, managed, titleOf);
 
   /** Text plus attachments as one user turn; only files this server saved may be attached. */
   const turnContent = (
@@ -915,6 +928,91 @@ async function sendOrFail<T>(reply: FastifyReply, run: () => Promise<T>): Promis
     reply.code(status).send({ error: err instanceof Error ? err.message : String(err) });
     return undefined;
   }
+}
+
+/** Phone alerts: the page subscribes here, and anything that waits on the user is pushed. */
+function registerPushRoutes(
+  app: FastifyInstance,
+  options: HttpServerOptions,
+  managed: ManagedSessions | null,
+  titleOf: (sessionId: string) => string | null,
+): void {
+  if (options.embedded) return;
+  const auth = { preHandler: bearerAuth(options.token) };
+  const push = new PushNotifier((msg, extra) => app.log.info(extra ?? {}, `push: ${msg}`));
+
+  app.get('/api/push/key', auth, async () => ({
+    publicKey: push.publicKey,
+    subscriptions: push.subscriptionCount,
+  }));
+  app.post('/api/push/subscribe', auth, async (request, reply) => {
+    if (!push.subscribe(request.body)) {
+      return reply.code(400).send({ error: 'not a push subscription' });
+    }
+    return { ok: true };
+  });
+  app.post<{ Body: { endpoint: string } }>(
+    '/api/push/unsubscribe',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['endpoint'],
+          properties: { endpoint: { type: 'string', maxLength: 2000 } },
+        },
+      },
+    },
+    async (request) => {
+      push.unsubscribe(request.body.endpoint);
+      return { ok: true };
+    },
+  );
+  app.post('/api/push/seen', auth, async () => {
+    push.markSeen();
+    return { ok: true };
+  });
+
+  managed?.onAlert((alert) => {
+    if (alert.kind === 'budget') {
+      push.notify({
+        title: `${alert.member} 예산 소진`,
+        body: `$${alert.costUsd.toFixed(2)} / $${alert.budgetUsd.toFixed(2)}에서 팀이 멈췄어요.`,
+        sessionId: alert.sessionId,
+        tag: `budget:${alert.sessionId}`,
+      });
+      return;
+    }
+    const { ask } = alert;
+    const name = ask.member ?? titleOf(ask.sessionId) ?? '직원';
+    const [title, body] = ask.plan
+      ? [`${name} 계획 승인 대기`, ask.plan.summary]
+      : ask.questions
+        ? [`${name}의 질문`, ask.questions[0].question]
+        : ask.chatter !== undefined
+          ? [`${name} 확인 필요`, ask.summary]
+          : [`${name} 승인 요청`, ask.summary];
+    push.notify({ title, body, sessionId: ask.sessionId, tag: `ask:${ask.sessionId}` });
+  });
+
+  // Terminal sessions: only the PermissionRequest hook counts. Without hooks a transcript
+  // timer guesses from silence, and any long-running command would buzz the phone.
+  options.store.on('broadcast', (message) => {
+    if (message.type !== 'agentToolPermission' || typeof message.id !== 'number') return;
+    const agent = options.store.get(message.id);
+    if (!agent) return;
+    const lead = agent.leadAgentId !== undefined ? options.store.get(agent.leadAgentId) : undefined;
+    if (!agent.hookDelivered && !lead?.hookDelivered) return;
+    const sessionId = path.basename(agent.jsonlFile, '.jsonl');
+    // Dashboard sessions already raised their own, more specific alert.
+    if (managed && managed.owner(sessionId, new Set()) !== 'none') return;
+    push.notify({
+      title: `${titleOf(sessionId) ?? agent.folderName ?? '직원'} 승인 대기`,
+      body: '터미널에서 승인을 기다리고 있어요.',
+      sessionId,
+      tag: `ask:${sessionId}`,
+    });
+  });
 }
 
 /** Dashboard-owned sessions exist only for the standalone CLI (never inside VS Code). */

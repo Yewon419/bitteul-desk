@@ -107,3 +107,17 @@ export const PALETTE_COUNT = 6;
  *  clientMessageHandler to guard saveAgentSeats payloads from a remote or
  *  hand-edited source corrupting the stored values with out-of-range values. */
 export const HUE_SHIFT_MAX_DEG = 360;
+
+// ── Phone push notifications (Web Push) ─────────────────────
+/** A page that reported itself on screen this recently means the user is already looking. */
+export const PUSH_SEEN_WINDOW_MS = 45_000;
+/** The same alert for the same session is sent once per this window. */
+export const PUSH_DEDUPE_MS = 20_000;
+/** How long the push service keeps an undelivered alert (phone off, no signal). */
+export const PUSH_TTL_SECONDS = 3600;
+/** One retry for a push service hiccup (5xx or network), after this pause. */
+export const PUSH_RETRY_DELAY_MS = 2000;
+/** VAPID contact. Apple rejects keys whose subject is not a mailto: or a public https URL. */
+export const PUSH_VAPID_SUBJECT = 'https://github.com/Yewon419/bitteul-desk';
+export const PUSH_KEYS_FILE = 'bitteul-push-vapid.json';
+export const PUSH_SUBSCRIPTIONS_FILE = 'bitteul-push-subscriptions.json';
