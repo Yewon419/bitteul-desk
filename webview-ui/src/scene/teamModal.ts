@@ -7,7 +7,6 @@ import {
   fetchJson,
   postJson,
   saveTeamDraft,
-  type TeamMember,
   type TeamRoster,
   type TeamTemplatesResponse,
 } from './api.js';
@@ -18,6 +17,8 @@ const MODELS: Array<[string, string]> = [
   ['haiku', 'Haiku · 빠름·저렴'],
 ];
 const MAX_MEMBERS = 8;
+/** Front-facing staff sprites in the office, one per palette. */
+const STAFF_VARIANTS = 6;
 const NEW_MEMBER_ROLE = '';
 
 export interface TeamRoomPick {
@@ -67,7 +68,8 @@ export function initTeamModal(opts: Options): () => void {
   const nameInput = document.getElementById('team-name') as HTMLInputElement | null;
   const cwdInput = document.getElementById('team-cwd') as HTMLInputElement | null;
   const budgetInput = document.getElementById('team-budget') as HTMLInputElement | null;
-  const addBtn = document.getElementById('team-add') as HTMLButtonElement | null;
+  const leadSlot = document.getElementById('team-lead');
+  const editor = document.getElementById('team-editor');
   const countEl = document.getElementById('team-count');
   if (
     !modal ||
@@ -79,7 +81,8 @@ export function initTeamModal(opts: Options): () => void {
     !nameInput ||
     !cwdInput ||
     !budgetInput ||
-    !addBtn
+    !leadSlot ||
+    !editor
   ) {
     throw new Error('[Scene] team dialog markup missing');
   }
@@ -98,126 +101,162 @@ export function initTeamModal(opts: Options): () => void {
     modal.hidden = true;
   };
 
-  /** Rows shown expanded: index 0 is the MD, then members by position. */
-  let open = new Set<number>();
+  /** The person being edited: 0 is the MD, then members by position; null when none. */
+  let selected: number | null = null;
+  /** The cards on screen by person, so typing in the editor updates just that card. */
+  let cards: HTMLElement[] = [];
 
-  const toggle = (row: number): void => {
-    if (open.has(row)) open.delete(row);
-    else open.add(row);
-    render();
+  const face = (person: number): HTMLImageElement => {
+    const img = el('img', {
+      className: 'tm-face',
+      alt: '',
+      src: `./scene/staff/front_${person % STAFF_VARIANTS}_a.png`,
+    });
+    img.setAttribute('aria-hidden', 'true');
+    return img;
   };
 
-  const rowHead = (
-    row: number,
-    name: string,
-    model: string,
-    role: string,
-    lead: boolean,
-  ): HTMLElement => {
-    const modelName = MODELS.find(([v]) => v === model)?.[1].split(' · ')[0] ?? model;
-    const title = el('span', { className: 'tm-name' }, name.trim() || '이름 없음');
-    if (lead) title.append(el('span', { className: 'tm-tag' }, '팀장'));
-    title.append(el('span', { className: 'tm-model' }, modelName));
-    const head = el(
+  const modelLabel = (model: string): string => MODELS.find(([v]) => v === model)?.[1] ?? model;
+
+  const select = (person: number | null): void => {
+    selected = person;
+    render();
+    if (person !== null) editor.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
+
+  const cardFor = (t: TeamRoster, person: number): HTMLElement => {
+    const lead = person === 0;
+    const m = lead ? null : t.members[person - 1];
+    const name = (lead ? t.leadLabel : (m?.label ?? '')).trim();
+    const role = lead ? '팀장' : (m?.role ?? '').trim() || '맡을 일을 적어 주세요';
+    const btn = el(
       'button',
-      { type: 'button', className: 'tm-row-head' },
-      el('span', { className: 'tm-avatar' }, Array.from(name.trim())[0] ?? '?'),
+      { type: 'button', className: 'tm-person' },
+      face(person),
+      el('span', { className: 'tm-person-name' }, name || '이름 없음'),
+      el('span', { className: 'tm-person-role' }, role),
       el(
         'span',
-        { className: 'tm-who' },
-        title,
-        el('span', { className: 'tm-role' }, role.trim() || '맡을 일을 적어 주세요'),
+        { className: 'tm-person-model' },
+        modelLabel(lead ? t.leadModel : (m?.model ?? '')),
       ),
-      el('span', { className: 'tm-chevron' }, '▾'),
     );
-    head.setAttribute('aria-expanded', String(open.has(row)));
-    head.addEventListener('click', () => toggle(row));
-    return head;
+    if (selected === person) btn.dataset.selected = '1';
+    if (lead) btn.dataset.lead = '1';
+    if (!name || (m && !m.role.trim())) btn.dataset.missing = '1';
+    btn.setAttribute('aria-pressed', String(selected === person));
+    btn.addEventListener('click', () => select(selected === person ? null : person));
+    return btn;
   };
 
-  const rowShell = (row: number, missing: boolean, lead: boolean): HTMLLIElement => {
-    const li = el('li', { className: 'tm-row' });
-    if (open.has(row)) li.dataset.open = '1';
-    if (missing) li.dataset.missing = '1';
-    if (lead) li.dataset.lead = '1';
-    return li;
+  const refreshCard = (person: number): void => {
+    if (!team || !cards[person]) return;
+    const fresh = cardFor(team, person);
+    cards[person].replaceWith(fresh);
+    cards[person] = fresh;
   };
 
-  const memberCard = (m: TeamMember, index: number): HTMLElement => {
-    const row = index + 1;
-    const li = rowShell(row, !m.label.trim() || !m.role.trim(), false);
-    const label = el('input', { value: m.label, maxLength: 20, placeholder: '예: 마케터' });
-    label.addEventListener('input', () => (m.label = label.value));
-    const role = el('textarea', {
-      value: m.role,
-      maxLength: 500,
-      rows: 2,
-      placeholder: '한 줄로: 이 사람이 맡을 일',
+  const addMember = (): void => {
+    if (!team || team.members.length >= MAX_MEMBERS) return;
+    const taken = new Set(team.members.map((m) => m.key));
+    let n = 1;
+    while (taken.has(`member-${n}`)) n++;
+    team.members.push({ key: `member-${n}`, label: '', role: NEW_MEMBER_ROLE, model: 'sonnet' });
+    select(team.members.length);
+    editor.querySelector<HTMLInputElement>('input')?.focus();
+  };
+
+  const editorFor = (t: TeamRoster, person: number): HTMLElement => {
+    const lead = person === 0;
+    const m = lead ? null : t.members[person - 1];
+    const label = el('input', {
+      value: lead ? t.leadLabel : (m?.label ?? ''),
+      maxLength: 20,
+      placeholder: lead ? '예: MD' : '예: 마케터',
     });
-    role.addEventListener('input', () => (m.role = role.value));
-    const model = modelSelect(m.model);
-    model.addEventListener('change', () => (m.model = model.value));
-    const remove = el(
-      'button',
-      { type: 'button', className: 'tm-text-btn team-remove' },
-      '이 팀원 빼기',
-    );
-    remove.addEventListener('click', () => {
-      team?.members.splice(index, 1);
-      // Rows after the removed one move up a place.
-      open = new Set([...open].filter((r) => r !== row).map((r) => (r > row ? r - 1 : r)));
-      render();
+    label.addEventListener('input', () => {
+      if (m) m.label = label.value;
+      else t.leadLabel = label.value;
+      refreshCard(person);
     });
-    const body = el(
+    const model = modelSelect(lead ? t.leadModel : (m?.model ?? 'sonnet'));
+    model.addEventListener('change', () => {
+      if (m) m.model = model.value;
+      else t.leadModel = model.value;
+      refreshCard(person);
+    });
+    const done = el('button', { type: 'button', className: 'tm-icon-btn' }, '✕');
+    done.setAttribute('aria-label', '고치기 닫기');
+    done.addEventListener('click', () => select(null));
+    const box = el(
       'div',
-      { className: 'tm-row-body', hidden: !open.has(row) },
+      { className: 'tm-editor' },
+      el(
+        'div',
+        { className: 'tm-editor-head' },
+        face(person),
+        el('h4', {}, lead ? '팀장' : '팀원'),
+        done,
+      ),
       el(
         'div',
         { className: 'tm-fields' },
         el('label', {}, '이름', label),
         el('label', {}, '모델', model),
       ),
+    );
+    if (!m) {
+      box.append(
+        el(
+          'p',
+          { className: 'team-lead-note' },
+          '대표님 지시를 받아 팀원에게 일을 나누고, 결과를 확인해서 보고해요.',
+        ),
+      );
+      return box;
+    }
+    const role = el('textarea', {
+      value: m.role,
+      maxLength: 500,
+      rows: 3,
+      placeholder: '한 줄로: 이 사람이 맡을 일',
+    });
+    role.addEventListener('input', () => {
+      m.role = role.value;
+      refreshCard(person);
+    });
+    const remove = el(
+      'button',
+      { type: 'button', className: 'tm-text-btn team-remove' },
+      '이 팀원 빼기',
+    );
+    remove.addEventListener('click', () => {
+      t.members.splice(person - 1, 1);
+      select(null);
+    });
+    box.append(
       el('label', {}, '맡을 일', role),
       el('div', { className: 'tm-row-foot' }, el('span', {}), remove),
     );
-    li.append(rowHead(row, m.label, m.model, m.role, false), body);
-    return li;
-  };
-
-  const leadCard = (t: TeamRoster): HTMLElement => {
-    const li = rowShell(0, !t.leadLabel.trim(), true);
-    const label = el('input', { value: t.leadLabel, maxLength: 20 });
-    label.addEventListener('input', () => (t.leadLabel = label.value));
-    const model = modelSelect(t.leadModel);
-    model.addEventListener('change', () => (t.leadModel = model.value));
-    const body = el(
-      'div',
-      { className: 'tm-row-body', hidden: !open.has(0) },
-      el(
-        'div',
-        { className: 'tm-fields' },
-        el('label', {}, '팀장 이름', label),
-        el('label', {}, '모델', model),
-      ),
-    );
-    li.append(
-      rowHead(
-        0,
-        t.leadLabel,
-        t.leadModel,
-        '대표님 지시를 받아 일을 나누고, 결과를 확인해 보고해요',
-        true,
-      ),
-      body,
-    );
-    return li;
+    return box;
   };
 
   function render(): void {
     if (!team) return;
-    list?.replaceChildren(leadCard(team), ...team.members.map(memberCard));
-    if (addBtn) addBtn.disabled = team.members.length >= MAX_MEMBERS;
-    if (countEl) countEl.textContent = `${team.members.length + 1}명`;
+    const t = team;
+    if (selected !== null && selected > t.members.length) selected = null;
+    cards = [cardFor(t, 0), ...t.members.map((_, i) => cardFor(t, i + 1))];
+    leadSlot?.replaceChildren(cards[0]);
+    const add = el(
+      'button',
+      { type: 'button', className: 'tm-person tm-add', disabled: t.members.length >= MAX_MEMBERS },
+      el('span', { className: 'tm-plus' }, '+'),
+      el('span', {}, t.members.length >= MAX_MEMBERS ? `최대 ${MAX_MEMBERS}명` : '팀원 추가'),
+    );
+    add.addEventListener('click', addMember);
+    list?.replaceChildren(...cards.slice(1).map((c) => el('li', {}, c)), el('li', {}, add));
+    editor?.replaceChildren(...(selected === null ? [] : [editorFor(t, selected)]));
+    if (countEl) countEl.textContent = `${t.members.length + 1}명`;
   }
 
   const renderTemplates = (selected: string): void => {
@@ -237,7 +276,7 @@ export function initTeamModal(opts: Options): () => void {
     cwdInput.value = source.cwd ?? '';
     budgetInput.value = source.budgetUsd === undefined ? '' : String(source.budgetUsd);
     deleteBtn.hidden = !name;
-    open = new Set();
+    selected = null;
     say('');
     render();
   };
@@ -248,15 +287,13 @@ export function initTeamModal(opts: Options): () => void {
     const name = nameInput.value.trim();
     if (!name) return '팀 이름을 적어 주세요. 사무실 방 팻말에 이 이름이 붙어요.';
     if (!team.leadLabel.trim()) {
-      open.add(0);
-      render();
+      select(0);
       return '팀장 이름을 적어 주세요.';
     }
     if (team.members.length === 0) return '팀원이 한 명은 있어야 해요.';
     const blank = team.members.find((m) => !m.label.trim() || !m.role.trim());
     if (blank) {
-      open.add(team.members.indexOf(blank) + 1);
-      render();
+      select(team.members.indexOf(blank) + 1);
       return '팀원마다 이름과 맡을 일을 적어 주세요.';
     }
     const cwd = cwdInput.value.trim();
@@ -278,17 +315,6 @@ export function initTeamModal(opts: Options): () => void {
       ...(budgetUsd !== undefined ? { budgetUsd } : {}),
     };
   };
-
-  addBtn.addEventListener('click', () => {
-    if (!team || team.members.length >= MAX_MEMBERS) return;
-    const taken = new Set(team.members.map((m) => m.key));
-    let n = 1;
-    while (taken.has(`member-${n}`)) n++;
-    team.members.push({ key: `member-${n}`, label: '', role: NEW_MEMBER_ROLE, model: 'sonnet' });
-    open.add(team.members.length);
-    render();
-    list.querySelector<HTMLInputElement>('.tm-row:last-child input')?.focus();
-  });
 
   templateSelect.addEventListener('change', () => useTemplate(templateSelect.value));
 
