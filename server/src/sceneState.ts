@@ -51,11 +51,6 @@ export class SceneState {
     return this.data.seats[sessionId];
   }
 
-  /** The session stored at a seat, if any (it may since have left). */
-  holderOf(seat: number): string | undefined {
-    return Object.entries(this.data.seats).find(([, s]) => s === seat)?.[0];
-  }
-
   rooms(): Record<string, string> {
     return { ...this.data.rooms };
   }

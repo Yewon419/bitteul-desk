@@ -47,8 +47,6 @@ export interface TeamRoster {
   members: TeamMember[];
   /** Work folder; absent means the folder the server runs in. */
   cwd?: string;
-  /** Seats of the team room, MD first, then members in roster order. */
-  seats?: number[];
   /** Spend cap in dollars for one run of the team; the SDK stops the session at it. */
   budgetUsd?: number;
 }
@@ -236,8 +234,7 @@ export class TeamTemplates {
   }
 
   save(team: TeamRoster): void {
-    const { seats: _seats, ...template } = team;
-    this.templates = [...this.templates.filter((t) => t.name !== team.name), template];
+    this.templates = [...this.templates.filter((t) => t.name !== team.name), team];
     writeAtomic(this.file, { templates: this.templates });
   }
 

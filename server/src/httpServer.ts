@@ -446,7 +446,7 @@ function registerDashboardRoutes(
         return reply.code(400).send(content);
       }
       if (!managed) return reply.code(503).send({ error: 'dashboard sessions unavailable' });
-      const team: TeamRoster = { ...request.body.team, ...(seats?.length ? { seats } : {}) };
+      const team = request.body.team;
       return sendOrFail(reply, async () => {
         const sessionId = await managed.startTeam(team, content, mode ? { mode } : {});
         if (seats?.length) scene?.moveSeats([{ sessionId, seat: seats[0] }]);
