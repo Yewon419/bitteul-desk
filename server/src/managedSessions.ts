@@ -354,9 +354,6 @@ export class ManagedSessions {
     private readonly teams: TeamRegistry = new TeamRegistry(),
   ) {}
 
-  /** Called the first time a member starts working, with the seat the team kept for it. */
-  memberJoined: ((memberSessionId: string, seat: number) => void) | null = null;
-
   /** The live team session a member transcript ('agent-<id>') belongs to. */
   private teamOfMember(sessionId: string): Managed | undefined {
     if (!sessionId.startsWith(MEMBER_SESSION_PREFIX)) return undefined;
@@ -1063,10 +1060,6 @@ export class ManagedSessions {
               // A member woken by SendMessage starts again under the same task id.
               const index = s?.team?.members.findIndex((mem) => mem.key === key) ?? -1;
               if (s?.team && key && index >= 0) {
-                const seat = s.team.seats?.[index + 1];
-                if (!s.members.has(m.task_id) && seat !== undefined) {
-                  this.memberJoined?.(MEMBER_SESSION_PREFIX + m.task_id, seat);
-                }
                 s.members.set(m.task_id, key);
                 s.running.add(m.task_id);
                 const used = s.usage.get(m.task_id);

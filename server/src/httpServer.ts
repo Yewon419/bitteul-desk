@@ -217,16 +217,6 @@ function registerDashboardRoutes(
   const sessionOf = (agent: AgentState): string => path.basename(agent.jsonlFile, '.jsonl');
   const uploads = options.uploadsDir ?? uploadsRoot(os.homedir());
   const templates = new TeamTemplates();
-  if (managed && scene) {
-    // A member takes the desk its team kept for it, unless someone still working sits there.
-    managed.memberJoined = (memberSessionId, seat) => {
-      if (scene.seatOf(memberSessionId) !== undefined) return;
-      const holder = scene.holderOf(seat);
-      const live = new Set([...options.store.values()].map(sessionOf));
-      if (holder && holder !== memberSessionId && live.has(holder)) return;
-      scene.moveSeats([{ sessionId: memberSessionId, seat }]);
-    };
-  }
 
   /** Text plus attachments as one user turn; only files this server saved may be attached. */
   const turnContent = (
