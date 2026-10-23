@@ -288,6 +288,7 @@ describe('dashboard routes', () => {
         activity: null,
         suggestion: null,
         activeTools: [],
+        team: null,
       },
     ]);
     const convo = (await (
