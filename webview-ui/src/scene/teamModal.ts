@@ -19,6 +19,7 @@ const MODELS: Array<[string, string]> = [
 const MAX_MEMBERS = 8;
 /** Front-facing staff sprites in the office, one per palette. */
 const STAFF_VARIANTS = 6;
+const LEAD_DUTY = '대표님 지시를 받아 팀원에게 일을 나누고, 결과를 확인해서 보고해요.';
 const NEW_MEMBER_ROLE = '';
 
 export interface TeamRoomPick {
@@ -105,6 +106,8 @@ export function initTeamModal(opts: Options): () => void {
   let selected: number | null = null;
   /** The cards on screen by person, so typing in the editor updates just that card. */
   let cards: HTMLElement[] = [];
+  /** The person whose duty bubble is open, if any. */
+  let peek: number | null = null;
 
   const face = (person: number): HTMLImageElement => {
     const img = el('img', {
@@ -120,6 +123,7 @@ export function initTeamModal(opts: Options): () => void {
 
   const select = (person: number | null): void => {
     selected = person;
+    peek = null;
     render();
     if (person !== null) editor.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   };
@@ -128,25 +132,35 @@ export function initTeamModal(opts: Options): () => void {
     const lead = person === 0;
     const m = lead ? null : t.members[person - 1];
     const name = (lead ? t.leadLabel : (m?.label ?? '')).trim();
-    const role = lead ? '팀장' : (m?.role ?? '').trim() || '맡을 일을 적어 주세요';
+    const duty = lead ? LEAD_DUTY : (m?.role ?? '').trim() || '맡을 일을 아직 안 적었어요.';
     const btn = el(
       'button',
       { type: 'button', className: 'tm-person' },
       face(person),
       el('span', { className: 'tm-person-name' }, name || '이름 없음'),
-      el('span', { className: 'tm-person-role' }, role),
+      ...(lead ? [el('span', { className: 'tm-person-lead' }, '팀장')] : []),
       el(
         'span',
         { className: 'tm-person-model' },
         modelLabel(lead ? t.leadModel : (m?.model ?? '')),
       ),
     );
+    const missing = !name || (m !== null && m !== undefined && !m.role.trim());
     if (selected === person) btn.dataset.selected = '1';
-    if (lead) btn.dataset.lead = '1';
-    if (!name || (m && !m.role.trim())) btn.dataset.missing = '1';
+    if (missing) btn.dataset.missing = '1';
     btn.setAttribute('aria-pressed', String(selected === person));
     btn.addEventListener('click', () => select(selected === person ? null : person));
-    return btn;
+    const help = el('button', { type: 'button', className: 'tm-help' }, '?');
+    help.setAttribute('aria-label', '맡을 일 보기');
+    help.setAttribute('aria-expanded', String(peek === person));
+    help.addEventListener('click', () => {
+      peek = peek === person ? null : person;
+      render();
+    });
+    const card = el('div', { className: 'tm-card' }, btn, help);
+    if (missing) card.dataset.missing = '1';
+    if (peek === person) card.append(el('p', { className: 'tm-bubble' }, duty));
+    return card;
   };
 
   const refreshCard = (person: number): void => {
@@ -206,13 +220,7 @@ export function initTeamModal(opts: Options): () => void {
       ),
     );
     if (!m) {
-      box.append(
-        el(
-          'p',
-          { className: 'team-lead-note' },
-          '대표님 지시를 받아 팀원에게 일을 나누고, 결과를 확인해서 보고해요.',
-        ),
-      );
+      box.append(el('p', { className: 'team-lead-note' }, LEAD_DUTY));
       return box;
     }
     const role = el('textarea', {
@@ -257,6 +265,17 @@ export function initTeamModal(opts: Options): () => void {
     list?.replaceChildren(...cards.slice(1).map((c) => el('li', {}, c)), el('li', {}, add));
     editor?.replaceChildren(...(selected === null ? [] : [editorFor(t, selected)]));
     if (countEl) countEl.textContent = `${t.members.length + 1}명`;
+    fitBubble();
+  }
+
+  /** Slide an open duty bubble sideways so it stays inside the org chart. */
+  function fitBubble(): void {
+    const bubble = document.querySelector<HTMLElement>('#team-modal .tm-bubble');
+    const box = bubble?.closest('.tm-org')?.getBoundingClientRect();
+    if (!bubble || !box) return;
+    const r = bubble.getBoundingClientRect();
+    const shift = Math.min(0, box.right - r.right) + Math.max(0, box.left - r.left);
+    if (shift) bubble.style.transform = `translateX(calc(-50% + ${shift}px))`;
   }
 
   const renderTemplates = (selected: string): void => {
@@ -277,6 +296,7 @@ export function initTeamModal(opts: Options): () => void {
     budgetInput.value = source.budgetUsd === undefined ? '' : String(source.budgetUsd);
     deleteBtn.hidden = !name;
     selected = null;
+    peek = null;
     say('');
     render();
   };
