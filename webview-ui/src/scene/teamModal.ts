@@ -68,6 +68,7 @@ export function initTeamModal(opts: Options): () => void {
   const cwdInput = document.getElementById('team-cwd') as HTMLInputElement | null;
   const budgetInput = document.getElementById('team-budget') as HTMLInputElement | null;
   const addBtn = document.getElementById('team-add') as HTMLButtonElement | null;
+  const countEl = document.getElementById('team-count');
   if (
     !modal ||
     !form ||
@@ -97,7 +98,54 @@ export function initTeamModal(opts: Options): () => void {
     modal.hidden = true;
   };
 
+  /** Rows shown expanded: index 0 is the MD, then members by position. */
+  let open = new Set<number>();
+
+  const toggle = (row: number): void => {
+    if (open.has(row)) open.delete(row);
+    else open.add(row);
+    render();
+  };
+
+  const rowHead = (
+    row: number,
+    name: string,
+    model: string,
+    role: string,
+    lead: boolean,
+  ): HTMLElement => {
+    const modelName = MODELS.find(([v]) => v === model)?.[1].split(' · ')[0] ?? model;
+    const title = el('span', { className: 'tm-name' }, name.trim() || '이름 없음');
+    if (lead) title.append(el('span', { className: 'tm-tag' }, '팀장'));
+    title.append(el('span', { className: 'tm-model' }, modelName));
+    const head = el(
+      'button',
+      { type: 'button', className: 'tm-row-head' },
+      el('span', { className: 'tm-avatar' }, Array.from(name.trim())[0] ?? '?'),
+      el(
+        'span',
+        { className: 'tm-who' },
+        title,
+        el('span', { className: 'tm-role' }, role.trim() || '맡을 일을 적어 주세요'),
+      ),
+      el('span', { className: 'tm-chevron' }, '▾'),
+    );
+    head.setAttribute('aria-expanded', String(open.has(row)));
+    head.addEventListener('click', () => toggle(row));
+    return head;
+  };
+
+  const rowShell = (row: number, missing: boolean, lead: boolean): HTMLLIElement => {
+    const li = el('li', { className: 'tm-row' });
+    if (open.has(row)) li.dataset.open = '1';
+    if (missing) li.dataset.missing = '1';
+    if (lead) li.dataset.lead = '1';
+    return li;
+  };
+
   const memberCard = (m: TeamMember, index: number): HTMLElement => {
+    const row = index + 1;
+    const li = rowShell(row, !m.label.trim() || !m.role.trim(), false);
     const label = el('input', { value: m.label, maxLength: 20, placeholder: '예: 마케터' });
     label.addEventListener('input', () => (m.label = label.value));
     const role = el('textarea', {
@@ -109,40 +157,67 @@ export function initTeamModal(opts: Options): () => void {
     role.addEventListener('input', () => (m.role = role.value));
     const model = modelSelect(m.model);
     model.addEventListener('change', () => (m.model = model.value));
-    const remove = el('button', { type: 'button', className: 'team-remove' }, '빼기');
+    const remove = el(
+      'button',
+      { type: 'button', className: 'tm-text-btn team-remove' },
+      '이 팀원 빼기',
+    );
     remove.addEventListener('click', () => {
       team?.members.splice(index, 1);
+      // Rows after the removed one move up a place.
+      open = new Set([...open].filter((r) => r !== row).map((r) => (r > row ? r - 1 : r)));
       render();
     });
-    return el(
-      'li',
-      { className: 'team-card' },
-      el('div', { className: 'team-card-row' }, el('label', {}, '이름', label), model, remove),
+    const body = el(
+      'div',
+      { className: 'tm-row-body', hidden: !open.has(row) },
+      el(
+        'div',
+        { className: 'tm-fields' },
+        el('label', {}, '이름', label),
+        el('label', {}, '모델', model),
+      ),
       el('label', {}, '맡을 일', role),
+      el('div', { className: 'tm-row-foot' }, el('span', {}), remove),
     );
+    li.append(rowHead(row, m.label, m.model, m.role, false), body);
+    return li;
   };
 
   const leadCard = (t: TeamRoster): HTMLElement => {
+    const li = rowShell(0, !t.leadLabel.trim(), true);
     const label = el('input', { value: t.leadLabel, maxLength: 20 });
     label.addEventListener('input', () => (t.leadLabel = label.value));
     const model = modelSelect(t.leadModel);
     model.addEventListener('change', () => (t.leadModel = model.value));
-    return el(
-      'li',
-      { className: 'team-card team-lead' },
-      el('div', { className: 'team-card-row' }, el('label', {}, '팀장 이름', label), model),
+    const body = el(
+      'div',
+      { className: 'tm-row-body', hidden: !open.has(0) },
       el(
-        'p',
-        { className: 'team-lead-note' },
-        '대표님 지시를 받아 팀원에게 일을 나누고, 결과를 확인해서 보고해요.',
+        'div',
+        { className: 'tm-fields' },
+        el('label', {}, '팀장 이름', label),
+        el('label', {}, '모델', model),
       ),
     );
+    li.append(
+      rowHead(
+        0,
+        t.leadLabel,
+        t.leadModel,
+        '대표님 지시를 받아 일을 나누고, 결과를 확인해 보고해요',
+        true,
+      ),
+      body,
+    );
+    return li;
   };
 
   function render(): void {
     if (!team) return;
     list?.replaceChildren(leadCard(team), ...team.members.map(memberCard));
     if (addBtn) addBtn.disabled = team.members.length >= MAX_MEMBERS;
+    if (countEl) countEl.textContent = `${team.members.length + 1}명`;
   }
 
   const renderTemplates = (selected: string): void => {
@@ -162,6 +237,7 @@ export function initTeamModal(opts: Options): () => void {
     cwdInput.value = source.cwd ?? '';
     budgetInput.value = source.budgetUsd === undefined ? '' : String(source.budgetUsd);
     deleteBtn.hidden = !name;
+    open = new Set();
     say('');
     render();
   };
@@ -171,10 +247,18 @@ export function initTeamModal(opts: Options): () => void {
     if (!team) return '팀 정보를 아직 못 불러왔어요.';
     const name = nameInput.value.trim();
     if (!name) return '팀 이름을 적어 주세요. 사무실 방 팻말에 이 이름이 붙어요.';
-    if (!team.leadLabel.trim()) return '팀장 이름을 적어 주세요.';
+    if (!team.leadLabel.trim()) {
+      open.add(0);
+      render();
+      return '팀장 이름을 적어 주세요.';
+    }
     if (team.members.length === 0) return '팀원이 한 명은 있어야 해요.';
     const blank = team.members.find((m) => !m.label.trim() || !m.role.trim());
-    if (blank) return '팀원마다 이름과 맡을 일을 적어 주세요.';
+    if (blank) {
+      open.add(team.members.indexOf(blank) + 1);
+      render();
+      return '팀원마다 이름과 맡을 일을 적어 주세요.';
+    }
     const cwd = cwdInput.value.trim();
     const budgetText = budgetInput.value.trim();
     const budgetUsd = budgetText ? Number(budgetText) : undefined;
@@ -201,8 +285,9 @@ export function initTeamModal(opts: Options): () => void {
     let n = 1;
     while (taken.has(`member-${n}`)) n++;
     team.members.push({ key: `member-${n}`, label: '', role: NEW_MEMBER_ROLE, model: 'sonnet' });
+    open.add(team.members.length);
     render();
-    list.querySelector<HTMLInputElement>('.team-card:last-child input')?.focus();
+    list.querySelector<HTMLInputElement>('.tm-row:last-child input')?.focus();
   });
 
   templateSelect.addEventListener('change', () => useTemplate(templateSelect.value));
@@ -263,6 +348,7 @@ export function initTeamModal(opts: Options): () => void {
   });
 
   document.getElementById('team-close')?.addEventListener('click', close);
+  document.getElementById('team-cancel')?.addEventListener('click', close);
   modal.addEventListener('click', (ev) => {
     if (ev.target === modal) close();
   });

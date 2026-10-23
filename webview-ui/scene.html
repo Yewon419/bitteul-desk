@@ -38,7 +38,6 @@
           'Apple SD Gothic Neo', sans-serif;
       }
       /* Text-heavy panels read in Pretendard; the office itself stays pixel. */
-      .team-card-box .tool-btn,
       .pair-card .tool-btn,
       .board-card .tool-btn {
         font-family: var(--read);
@@ -91,57 +90,132 @@
         align-items: flex-start;
         justify-content: center;
         padding: 16px;
-        background: rgba(8, 14, 24, 0.72);
+        background: rgba(8, 14, 24, 0.6);
         overflow-y: auto;
       }
       #team-modal[hidden] {
         display: none;
       }
       .team-card-box {
+        --tm-ink: #13293d;
+        --tm-dim: #5b7186;
+        --tm-line: #d6e1eb;
+        --tm-soft: #f3f7fb;
+        --tm-accent: #2b86c5;
+        --tm-danger: #c0392b;
         margin: auto;
         width: min(560px, 100%);
         box-sizing: border-box;
-        padding: 20px;
+        padding: 22px 22px 18px;
         font-family: var(--read);
-        color: #13293d;
+        color: var(--tm-ink);
         background: #ffffff;
-        border: 3px solid #13293d;
-        box-shadow: 4px 4px 0 #13293d;
+        border: 1px solid var(--tm-line);
+        border-radius: 14px;
+        box-shadow: 0 18px 48px rgba(8, 14, 24, 0.35);
       }
-      .team-card-box h2 {
-        margin: 0 0 6px;
+      .tm-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .tm-head h2 {
+        flex: 1;
+        margin: 0;
+        font-size: 19px;
+        font-weight: 700;
+      }
+      .tm-icon-btn {
+        display: inline-grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        font: inherit;
         font-size: 18px;
+        line-height: 1;
+        color: var(--tm-dim);
+        background: transparent;
+        border: 0;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .tm-icon-btn:hover {
+        color: var(--tm-ink);
+        background: var(--tm-soft);
       }
       .team-intro {
-        margin: 0 0 14px;
+        margin: 6px 0 18px;
         font-size: 13px;
         line-height: 1.6;
-        color: #2b5d85;
+        color: var(--tm-dim);
       }
       #team-form {
         display: flex;
         flex-direction: column;
+        gap: 20px;
+      }
+      .tm-section {
+        display: flex;
+        flex-direction: column;
         gap: 12px;
+      }
+      .tm-section-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tm-section-head h3 {
+        flex: 1;
+        margin: 0;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .tm-count {
+        margin-left: 4px;
+        font-weight: 500;
+        color: var(--tm-dim);
+      }
+      .tm-grid {
+        display: grid;
+        grid-template-columns: 1fr 140px;
+        gap: 12px;
+      }
+      @media (max-width: 480px) {
+        .tm-grid {
+          grid-template-columns: 1fr;
+        }
       }
       #team-form label {
         display: flex;
         flex-direction: column;
-        gap: 4px;
-        font-size: 13px;
+        gap: 6px;
         min-width: 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--tm-ink);
       }
       #team-form input,
       #team-form select,
       #team-form textarea {
         box-sizing: border-box;
         width: 100%;
+        min-width: 0;
+        padding: 9px 11px;
         font: inherit;
         font-size: 16px;
-        padding: 6px 8px;
-        color: #13293d;
-        background: #f1f6fb;
-        border: 2px solid #13293d;
-        border-radius: 0;
+        font-weight: 400;
+        color: var(--tm-ink);
+        background: #ffffff;
+        border: 1px solid var(--tm-line);
+        border-radius: 8px;
+      }
+      #team-form input:focus,
+      #team-form select:focus,
+      #team-form textarea:focus {
+        outline: none;
+        border-color: var(--tm-accent);
+        box-shadow: 0 0 0 3px rgba(43, 134, 197, 0.18);
       }
       #team-form textarea {
         resize: vertical;
@@ -155,77 +229,163 @@
       .team-template-row label {
         flex: 1;
       }
+      .team-hint {
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 1.5;
+        color: var(--tm-dim);
+      }
+      .tm-text-btn {
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--tm-accent);
+        background: transparent;
+        border: 0;
+        border-radius: 8px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .tm-text-btn:hover {
+        background: var(--tm-soft);
+      }
+      .tm-text-btn:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      #team-template-delete {
+        color: var(--tm-danger);
+      }
+      #team-template-delete[hidden] {
+        display: none;
+      }
       #team-members {
         list-style: none;
         margin: 0;
         padding: 0;
+        border: 1px solid var(--tm-line);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      .tm-row + .tm-row {
+        border-top: 1px solid var(--tm-line);
+      }
+      .tm-row[data-open] {
+        background: var(--tm-soft);
+      }
+      .tm-row-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        font: inherit;
+        text-align: left;
+        color: inherit;
+        background: transparent;
+        border: 0;
+        cursor: pointer;
+      }
+      .tm-avatar {
+        flex: 0 0 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        font-size: 14px;
+        font-weight: 700;
+        color: #ffffff;
+        background: #6f9fc4;
+        border-radius: 8px;
+      }
+      .tm-row[data-lead] .tm-avatar {
+        background: #e0a800;
+      }
+      .tm-who {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .tm-name {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .tm-tag {
+        font-size: 12px;
+        font-weight: 600;
+        color: #9a7300;
+      }
+      .tm-model {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--tm-dim);
+      }
+      .tm-role {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        color: var(--tm-dim);
+      }
+      .tm-row[data-missing] .tm-role {
+        color: var(--tm-danger);
+      }
+      .tm-chevron {
+        flex: 0 0 auto;
+        color: var(--tm-dim);
+        transition: transform 0.15s;
+      }
+      .tm-row[data-open] .tm-chevron {
+        transform: rotate(180deg);
+      }
+      .tm-row-body {
         display: flex;
         flex-direction: column;
         gap: 10px;
+        padding: 0 12px 12px 54px;
       }
-      .team-card {
+      .tm-row-body[hidden] {
+        display: none;
+      }
+      .tm-fields {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      @media (max-width: 480px) {
+        .tm-row-body {
+          padding-left: 12px;
+        }
+        .tm-fields {
+          grid-template-columns: 1fr;
+        }
+      }
+      .tm-row-foot {
         display: flex;
-        flex-direction: column;
+        justify-content: space-between;
+        align-items: center;
         gap: 8px;
-        padding: 10px;
-        background: #f7fafc;
-        border: 2px solid #13293d;
-      }
-      .team-lead {
-        background: #fff6dc;
-        border-left-width: 6px;
-        border-left-color: #e0a800;
-      }
-      .team-card-row {
-        display: flex;
-        gap: 8px;
-        align-items: flex-end;
-        flex-wrap: wrap;
-      }
-      .team-card-row label {
-        flex: 1 1 140px;
-      }
-      .team-card-row .team-model {
-        flex: 1 1 170px;
-        width: auto;
       }
       .team-lead-note {
         margin: 0;
         font-size: 12px;
         line-height: 1.5;
-        color: #5a4a12;
+        color: var(--tm-dim);
       }
-      .team-remove,
-      #team-template-delete {
-        font: inherit;
-        font-size: 13px;
-        padding: 7px 10px;
-        color: #b3261e;
-        background: #ffffff;
-        border: 2px solid #b3261e;
-        cursor: pointer;
-      }
-      #team-template-delete[hidden] {
-        display: none;
-      }
-      #team-add {
-        align-self: flex-start;
-        background: #ffffff;
-      }
-      #team-add:disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
-      .team-hint {
-        font-size: 12px;
-        line-height: 1.5;
-        color: #4a6378;
+      .team-remove {
+        color: var(--tm-danger);
       }
       #team-error {
         margin: 0;
         font-size: 13px;
         line-height: 1.5;
-        color: #b3261e;
+        color: var(--tm-danger);
       }
       #team-error:empty {
         display: none;
@@ -236,10 +396,35 @@
       .team-actions {
         display: flex;
         flex-wrap: wrap;
+        align-items: center;
         gap: 8px;
+        padding-top: 16px;
+        border-top: 1px solid var(--tm-line);
       }
-      #team-save {
+      .tm-spacer {
+        flex: 1;
+      }
+      .tm-btn {
+        padding: 10px 16px;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--tm-ink);
         background: #ffffff;
+        border: 1px solid var(--tm-line);
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .tm-btn:hover {
+        background: var(--tm-soft);
+      }
+      .tm-btn-primary {
+        color: #ffffff;
+        background: var(--tm-accent);
+        border-color: var(--tm-accent);
+      }
+      .tm-btn-primary:hover {
+        background: #2475ad;
       }
       #desk-hire {
         position: absolute;
@@ -512,49 +697,60 @@
     </div>
     <div id="team-modal" role="dialog" aria-modal="true" aria-labelledby="team-heading" hidden>
       <div class="team-card-box">
-        <h2 id="team-heading">새 팀 만들기</h2>
+        <div class="tm-head">
+          <h2 id="team-heading">새 팀 만들기</h2>
+          <button type="button" id="team-close" class="tm-icon-btn" aria-label="닫기">✕</button>
+        </div>
         <p class="team-intro">
           팀장이 대표님 지시를 받아 팀원에게 일을 나눠요. 팀원끼리도 직접 이야기하고, 허락이 필요한
           일은 팀장 대화 창으로 모여요.
         </p>
         <form id="team-form">
-          <div class="team-template-row">
+          <section class="tm-section">
+            <div class="team-template-row">
+              <label
+                >시작할 구성
+                <select id="team-template"></select
+              ></label>
+              <button type="button" id="team-template-delete" class="tm-text-btn" hidden>
+                템플릿 삭제
+              </button>
+            </div>
             <label
-              >시작할 구성
-              <select id="team-template"></select
-            ></label>
-            <button type="button" id="team-template-delete" hidden>템플릿 삭제</button>
-          </div>
-          <label
-            >팀 이름 <input id="team-name" maxlength="40" placeholder="예: 랜딩페이지 팀"
-          /></label>
-          <label
-            >작업 폴더
-            <input
-              id="team-cwd"
-              maxlength="1000"
-              placeholder="비우면 기본 폴더 (빛뜰 데스크를 켠 곳)"
-          /></label>
-          <label
-            >예산 (달러)
-            <input
-              id="team-budget"
-              type="number"
-              inputmode="decimal"
-              min="0.1"
-              max="1000"
-              step="0.1"
-              placeholder="비우면 한도 없음"
-            />
-            <span class="team-hint">이만큼 쓰면 팀이 멈춰요. 80%를 넘기면 대화 창에 알려요.</span>
-          </label>
-          <ul id="team-members"></ul>
-          <button type="button" id="team-add" class="tool-btn">+ 팀원 추가</button>
+              >팀 이름 <input id="team-name" maxlength="40" placeholder="예: 랜딩페이지 팀"
+            /></label>
+            <div class="tm-grid">
+              <label
+                >작업 폴더
+                <input id="team-cwd" maxlength="1000" placeholder="비우면 빛뜰 데스크를 켠 폴더"
+              /></label>
+              <label
+                >예산 (달러)
+                <input
+                  id="team-budget"
+                  type="number"
+                  inputmode="decimal"
+                  min="0.1"
+                  max="1000"
+                  step="0.1"
+                  placeholder="한도 없음"
+              /></label>
+            </div>
+            <span class="team-hint">예산만큼 쓰면 팀이 멈춰요. 80%를 넘기면 대화 창에 알려요.</span>
+          </section>
+          <section class="tm-section">
+            <div class="tm-section-head">
+              <h3>팀원<span class="tm-count" id="team-count"></span></h3>
+              <button type="button" id="team-add" class="tm-text-btn">+ 팀원 추가</button>
+            </div>
+            <ul id="team-members"></ul>
+          </section>
           <p id="team-error" role="status"></p>
           <div class="team-actions">
-            <button type="submit" class="tool-btn">팀 만들기</button>
-            <button type="button" id="team-save" class="tool-btn">템플릿으로 저장</button>
-            <button type="button" id="team-close" class="tool-btn">닫기</button>
+            <button type="button" id="team-save" class="tm-text-btn">템플릿으로 저장</button>
+            <span class="tm-spacer"></span>
+            <button type="button" id="team-cancel" class="tm-btn">취소</button>
+            <button type="submit" class="tm-btn tm-btn-primary">팀 만들기</button>
           </div>
         </form>
       </div>
