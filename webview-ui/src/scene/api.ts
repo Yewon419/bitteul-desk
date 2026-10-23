@@ -68,6 +68,8 @@ export interface MemberStatus {
   tokens: number;
   toolUses: number;
   lastTool: string | null;
+  /** The member's own transcript session, once it has started working. */
+  sessionId: string | null;
 }
 
 export interface WorkLimit {
@@ -87,6 +89,7 @@ export interface CreditStatus {
 
 export interface TeamStatus {
   name: string;
+  leadLabel: string;
   plan: 'none' | 'waiting' | 'approved';
   autoAllowed: number;
   costUsd: number;

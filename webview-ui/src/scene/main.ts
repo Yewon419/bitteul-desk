@@ -8,7 +8,15 @@
 import type { ServerMessage } from '../../../core/src/messages.js';
 import { transport } from '../transport/index.js';
 import { Ambient, type AmbientData } from './ambient.js';
-import { type AgentMeta, chatIsOpen, chatUrl, fetchJson, openChatWindow, postJson } from './api.js';
+import {
+  type AgentMeta,
+  chatIsOpen,
+  chatUrl,
+  fetchJson,
+  type MemberStatus,
+  openChatWindow,
+  postJson,
+} from './api.js';
 import {
   ALERT_BLINK_MS,
   BLINK_EVERY_MS,
@@ -90,6 +98,12 @@ import {
 import { READING_TOOLS, toolLabel } from './labels.js';
 import { dropMoves, planSeats, type SeatPlan } from './seating.js';
 import { initTeamModal, type TeamRoomPick } from './teamModal.js';
+import {
+  type DeskMood,
+  drawTeamOffice,
+  type TeamOfficeView,
+  type TeamTarget,
+} from './teamOffice.js';
 
 type Point = [number, number];
 
@@ -279,6 +293,50 @@ function labelOf(a: Agent): string {
   if (mood === 'resting') return '보고 끝, 대기 중';
   const tool = currentTool(a);
   return tool ? toolLabel(tool.name, tool.status) : '생각하는 중';
+}
+
+/** A member's desk: the server's run state, except that a waiting approval always shows. */
+function memberMood(m: MemberStatus, a: Agent | undefined): DeskMood {
+  if (a && moodOf(a) === 'alert') return 'alert';
+  if (m.state === 'working') return 'working';
+  if (m.state === 'done') return 'done';
+  if (m.state === 'failed') return 'failed';
+  return 'resting';
+}
+
+/** What a team office shows for the MD `leadId`; null while its team status is unknown. */
+function teamView(leadId: number, idBySession: Map<string, number>): TeamOfficeView | null {
+  const meta = metas.get(leadId);
+  const lead = agents.get(leadId);
+  if (!meta?.team || !lead) return null;
+  const team = meta.team;
+  const leadMood = moodOf(lead);
+  return {
+    team,
+    pending: meta.pending.length,
+    lead: {
+      label: team.leadLabel,
+      mood: leadMood,
+      says: leadMood === 'resting' ? null : labelOf(lead),
+      palette: 0,
+      sessionId: meta.sessionId,
+    },
+    members: team.members.map((m, i) => {
+      const id = m.sessionId ? idBySession.get(m.sessionId) : undefined;
+      const a = id === undefined ? undefined : agents.get(id);
+      const mood = memberMood(m, a);
+      const says =
+        mood === 'alert' || (mood === 'working' && a && moodOf(a) === 'working')
+          ? a
+            ? labelOf(a)
+            : null
+          : mood === 'working'
+            ? '일하는 중'
+            : null;
+      // Faces follow the order in the new-team dialog: the MD wears the first, members the rest.
+      return { label: m.label, mood, says, palette: i + 1, sessionId: m.sessionId };
+    }),
+  };
 }
 
 function screenPath(ctx: CanvasRenderingContext2D, poly: Point[]): void {
@@ -827,6 +885,9 @@ async function start(): Promise<void> {
   /** Monitors of desks nobody sits at; the hire button appears over them. */
   let emptyDesks: HitBox[] = [];
   let signZones: HitBox[] = [];
+  let teamTargets: TeamTarget[] = [];
+  /** Rooms drawn as a team office, each with its MD's agent id. */
+  let teamRooms = new Map<number, number>();
   let plan: SeatPlan = planSeats([], new Map(), perFloor);
   const storedSeats = new Map<number, number>();
   const roomTitles = new Map<number, string>();
@@ -835,10 +896,14 @@ async function start(): Promise<void> {
   const hire = document.getElementById('hire');
   const teamBtn = document.getElementById('team');
 
-  /** Whole rooms for a team: the first run of empty rooms that fits, untitled ones first. */
-  const pickTeamRooms = (people: number): TeamRoomPick => {
-    const count = Math.ceil(people / perRoom);
+  /**
+   * One empty room for a team, untitled ones first; the whole team's office is drawn in it.
+   * Only the MD gets a seat number: members are placed by the office, not by seat.
+   */
+  const pickTeamRooms = (): TeamRoomPick => {
+    const count = 1;
     const empty = (room: number): boolean =>
+      !teamRooms.has(room) &&
       Array.from({ length: perRoom }, (_, d) => room * perRoom + d).every(
         (seat) => !plan.agentAt.has(seat),
       );
@@ -855,9 +920,7 @@ async function start(): Promise<void> {
       fallback ??= first;
     }
     const first = fallback ?? floors * layout.rooms;
-    const rooms = Array.from({ length: count }, (_, i) => first + i);
-    const seats = Array.from({ length: people }, (_, i) => first * perRoom + i);
-    return { seats, rooms };
+    return { seats: [first * perRoom], rooms: [first] };
   };
 
   const pollScene = async (): Promise<void> => {
@@ -1080,6 +1143,9 @@ async function start(): Promise<void> {
     if (ev.relatedTarget !== canvas) hideDeskHire();
   });
 
+  const teamTargetAt = (x: number, y: number): TeamTarget | undefined =>
+    [...teamTargets].reverse().find((h) => x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1);
+
   let press: { id: number; x: number; y: number; timer: number } | null = null;
   let drag: { id: number; x: number; y: number } | null = null;
 
@@ -1174,7 +1240,10 @@ async function start(): Promise<void> {
       if (drag) return;
     }
     const pointable =
-      inside(hitBoxes, x, y) || (token && inside(signZones, x, y)) || inside([wallZone], x, y);
+      inside(hitBoxes, x, y) ||
+      (token && inside(signZones, x, y)) ||
+      (token && teamTargetAt(x, y)) ||
+      (!teamRooms.has(0) && inside([wallZone], x, y));
     canvas.style.cursor = pointable ? 'pointer' : 'default';
     if (ev.pointerType === 'mouse') {
       const desk = inside(emptyDesks, x, y);
@@ -1200,7 +1269,14 @@ async function start(): Promise<void> {
       else showToast('이 직원 정보를 아직 불러오지 못했어요. 2초쯤 뒤에 다시 눌러 주세요.');
       return;
     }
-    if (inside([wallZone], x, y)) {
+    const target = teamTargetAt(x, y);
+    if (target) {
+      if (!token) return;
+      if (target.sessionId) openChat(token, target.sessionId);
+      else showToast('팀장 정보를 아직 불러오지 못했어요. 2초쯤 뒤에 다시 눌러 주세요.');
+      return;
+    }
+    if (!teamRooms.has(0) && inside([wallZone], x, y)) {
       openBoard();
       return;
     }
@@ -1233,13 +1309,48 @@ async function start(): Promise<void> {
     ctx.imageSmoothingEnabled = false;
 
     const ordered = [...agents.values()].sort((a, b) => a.id - b.id);
-    plan = planSeats(
+    const idBySession = new Map<string, number>();
+    metas.forEach((m) => idBySession.set(m.sessionId, m.id));
+    // A team's MD claims the room its seat is in, and the team is drawn there as one office.
+    // Everyone else is seated around those rooms.
+    const firstPlan = planSeats(
       ordered.map((a) => a.id),
       storedSeats,
       perFloor,
     );
-    if (plan.floors !== floors) {
-      floors = plan.floors;
+    const offices = new Map<number, number>();
+    const inTeam = new Set<number>();
+    for (const a of ordered) {
+      const team = metas.get(a.id)?.team;
+      const seat = firstPlan.seatOf.get(a.id);
+      if (!team || seat === undefined) continue;
+      const room = Math.floor(seat / perRoom);
+      if (offices.has(room)) continue;
+      offices.set(room, a.id);
+      inTeam.add(a.id);
+      for (const m of team.members) {
+        const id = m.sessionId ? idBySession.get(m.sessionId) : undefined;
+        if (id !== undefined) inTeam.add(id);
+      }
+    }
+    teamRooms = offices;
+    const blocked = new Set(
+      [...offices.keys()].flatMap((r) =>
+        Array.from({ length: perRoom }, (_, d) => r * perRoom + d),
+      ),
+    );
+    plan = planSeats(
+      ordered.filter((a) => !inTeam.has(a.id)).map((a) => a.id),
+      storedSeats,
+      perFloor,
+      blocked,
+    );
+    const neededFloors = Math.max(
+      plan.floors,
+      Math.ceil((Math.max(-1, ...offices.keys()) + 1) / layout.rooms),
+    );
+    if (neededFloors !== floors) {
+      floors = neededFloors;
       fit();
     }
     const factor = canvas.width / sceneW;
@@ -1254,6 +1365,7 @@ async function start(): Promise<void> {
     const zones: HitBox[] = [];
     const empties: HitBox[] = [];
     const signs: HitBox[] = [];
+    const targets: TeamTarget[] = [];
     const halfW = staff.back[0][0].width / 2;
     let offsetX = 0;
     let offsetY = 0;
@@ -1279,6 +1391,31 @@ async function start(): Promise<void> {
         offsetY = Math.floor(globalRoom / cols) * roomH;
         const roomT = t + globalRoom * ROOM_TIME_SHIFT_MS;
         ctx.setTransform(factor, 0, 0, factor, offsetX * factor, (offsetY - viewY) * factor);
+        const leadId = teamRooms.get(globalRoom);
+        const office = leadId === undefined ? null : teamView(leadId, idBySession);
+        if (office) {
+          const out = drawTeamOffice(ctx, roomW, roomH, office, staff.front, roomT);
+          for (const tg of out.targets) {
+            targets.push({
+              ...tg,
+              x0: offsetX + tg.x0,
+              y0: offsetY + tg.y0,
+              x1: offsetX + tg.x1,
+              y1: offsetY + tg.y1,
+            });
+          }
+          for (const b of out.bubbles) {
+            bubbles.push([
+              offsetX + b.cx,
+              offsetY + b.bottom,
+              b.text,
+              b.alert,
+              !!b.sessionId && chatIsOpen(b.sessionId),
+            ]);
+          }
+          drawSign(ctx, roomW, office.team.name, false);
+          continue;
+        }
         ctx.drawImage(bg, 0, 0);
         ambient.drawBack(ctx, roomT);
         const walkers: Array<[Agent, Body]> = [];
@@ -1375,6 +1512,7 @@ async function start(): Promise<void> {
     seatZones = zones;
     emptyDesks = empties;
     signZones = signs;
+    teamTargets = targets;
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

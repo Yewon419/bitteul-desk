@@ -83,6 +83,8 @@ export interface MemberStatus {
   tokens: number;
   toolUses: number;
   lastTool: string | null;
+  /** The member's own transcript session, once it has started working. */
+  sessionId: string | null;
 }
 
 /** One of the account's usage limits (the "작업한도"), as the CLI last reported it. */
@@ -106,6 +108,7 @@ export interface CreditStatus {
 /** What the dashboard shows about a team session. */
 export interface TeamStatus {
   name: string;
+  leadLabel: string;
   plan: 'none' | 'waiting' | 'approved';
   /** Requests the approved plan allowed without asking. */
   autoAllowed: number;
@@ -413,8 +416,9 @@ export class ManagedSessions {
     const team = s.team;
     const waiting = [...this.pending.values()].some((p) => p.sessionId === sessionId && p.plan);
     const members = team.members.map((m): MemberStatus => {
-      const runs = [...s.members].filter(([, key]) => key === m.key).map(([id]) => s.usage.get(id));
-      const used = runs.filter((u): u is MemberUsage => !!u);
+      const ids = [...s.members].filter(([, key]) => key === m.key).map(([id]) => id);
+      const used = ids.map((id) => s.usage.get(id)).filter((u): u is MemberUsage => !!u);
+      const lastId = ids[ids.length - 1];
       const last = used[used.length - 1];
       return {
         label: m.label,
@@ -422,6 +426,7 @@ export class ManagedSessions {
         tokens: used.reduce((n, u) => n + u.tokens, 0),
         toolUses: used.reduce((n, u) => n + u.toolUses, 0),
         lastTool: last?.lastTool ?? null,
+        sessionId: lastId ? MEMBER_SESSION_PREFIX + lastId : null,
       };
     });
     const credits = [...this.rateLimits.values()].find(
@@ -429,6 +434,7 @@ export class ManagedSessions {
     );
     return {
       name: team.name,
+      leadLabel: team.leadLabel,
       plan: waiting ? 'waiting' : s.plan ? 'approved' : 'none',
       autoAllowed: s.autoAllowed,
       costUsd: Math.max(0, s.costUsd - s.costAtStart),

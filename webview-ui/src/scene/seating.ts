@@ -9,18 +9,22 @@ export interface SeatPlan {
   floors: number;
 }
 
-/** Stored seats win when free; everyone else takes the lowest free seat, in id order. */
+/**
+ * Stored seats win when free; everyone else takes the lowest free seat, in id order.
+ * `blocked` seats belong to a team office and are never handed out.
+ */
 export function planSeats(
   agentIds: number[],
   stored: Map<number, number>,
   perFloor: number,
+  blocked: ReadonlySet<number> = new Set(),
 ): SeatPlan {
   const seatOf = new Map<number, number>();
   const agentAt = new Map<number, number>();
   const sorted = [...agentIds].sort((a, b) => a - b);
   for (const id of sorted) {
     const seat = stored.get(id);
-    if (seat !== undefined && !agentAt.has(seat)) {
+    if (seat !== undefined && !agentAt.has(seat) && !blocked.has(seat)) {
       seatOf.set(id, seat);
       agentAt.set(seat, id);
     }
@@ -28,7 +32,7 @@ export function planSeats(
   let next = 0;
   for (const id of sorted) {
     if (seatOf.has(id)) continue;
-    while (agentAt.has(next)) next++;
+    while (agentAt.has(next) || blocked.has(next)) next++;
     seatOf.set(id, next);
     agentAt.set(next, id);
   }

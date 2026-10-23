@@ -16,6 +16,12 @@ test('stored seats win and everyone else fills the lowest free seats', () => {
   assert.equal(plan.floors, 1);
 });
 
+test('seats in a team office are never handed out, stored or not', () => {
+  const plan = planSeats([1, 2], new Map([[1, 0]]), PER_FLOOR, new Set([0, 1]));
+  assert.equal(plan.seatOf.get(1), 2);
+  assert.equal(plan.seatOf.get(2), 3);
+});
+
 test('a stored seat past the first floor adds a floor; a clash falls back to a free seat', () => {
   const plan = planSeats(
     [1, 2],
