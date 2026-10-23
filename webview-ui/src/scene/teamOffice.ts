@@ -70,9 +70,11 @@ export interface TeamBubble {
   sessionId: string | null;
 }
 
-/** The painted room and the staff sprites drawn into it. */
+/** The painted room, what of it stands in front of people, and the staff sprites. */
 export interface TeamOfficeArt {
   room: HTMLImageElement;
+  /** `team_office_front.png`: the MD's chair, the members' monitors and desks, cut out. */
+  overlay: HTMLImageElement;
   front: HTMLImageElement[][];
   back: HTMLImageElement[][];
 }
@@ -88,30 +90,30 @@ interface Rect {
 /** The cork board; the team's numbers are pinned on it as a card. */
 const BOARD = { x0: 96, y0: 300, x1: 220, y1: 422 };
 const GLASS = { x0: 242, y0: 182, x1: 522, y1: 460 };
-/** The MD sits on the glass office chair, back to the room, facing its monitor. */
+/** The MD sits in the glass office chair, back to the room, facing its monitor. */
 const LEAD = {
   cx: 345,
-  bottom: 400,
+  bottom: 382,
   screen: { x: 413, y: 311, w: 58, h: 35 },
   plateCx: 384,
   plateY: 428,
 };
-/**
- * Member desks, two per row. `edge` is the front edge of the desk top: a member's legs go behind
- * it, so the painted desk from there down is drawn again over them.
- */
+/** Member desks, two per row. `surface` is the desk top the monitors stand on. */
 const DESK_ROWS = [
-  { screenY: 480, edge: 539, bottom: 592, plateY: 556 },
-  { screenY: 635, edge: 693, bottom: 745, plateY: 710 },
-  { screenY: 796, edge: 854, bottom: 907, plateY: 872 },
-  { screenY: 966, edge: 1027, bottom: 1081, plateY: 1045 },
+  { screenY: 480, surface: 513, bottom: 592, plateY: 556 },
+  { screenY: 635, surface: 668, bottom: 745, plateY: 710 },
+  { screenY: 796, surface: 829, bottom: 907, plateY: 872 },
+  { screenY: 966, surface: 999, bottom: 1081, plateY: 1045 },
 ];
-/** Members sit at the outer monitor; the one by the aisle shows how their work is going. */
+/**
+ * Members sit in the chair behind the outer monitor and look over it; that monitor shows how
+ * their work is going.
+ */
 const WINGS = [
-  { x0: 62, x1: 310, seatX: 134, screenX: 221, plateCx: 139 },
-  { x0: 456, x1: 706, seatX: 635, screenX: 475, plateCx: 629 },
+  { x0: 62, x1: 310, seatX: 134, screenX: 97, plateCx: 139 },
+  { x0: 456, x1: 706, seatX: 635, screenX: 598, plateCx: 629 },
 ];
-const SCREEN_W = 71;
+const SCREEN_W = 73;
 const SCREEN_H = 38;
 const BOSS = {
   x0: 208,
@@ -123,8 +125,11 @@ const BOSS = {
   plateY: 1150,
 };
 /** Staff sprites are painted for the one-person rooms; the team office is drawn smaller. */
-const SPRITE_SCALE = 2 / 3;
-const LEGS_HIDDEN = 12;
+const MEMBER_SCALE = 2 / 3;
+/** The MD is drawn to fit its chair. */
+const LEAD_SCALE = 1 / 2;
+/** How far a member sits down behind the monitor: their eyes stay just above it. */
+const SIT_BELOW_SURFACE = -4;
 const PLATE_W = 120;
 /** Wider than the painted nameplate, so a short name still covers it. */
 const PLATE_MIN_W = 80;
@@ -283,15 +288,16 @@ function frameFor(seat: TeamSeat, t: number, seed: number): number {
   return FRAME_A;
 }
 
-/** One sprite, scaled to the office, standing on `bottom`. Returns its top. */
+/** One sprite at `scale`, standing on `bottom`. Returns its top. */
 function drawSprite(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
   cx: number,
   bottom: number,
+  scale: number,
 ): number {
-  const w = Math.round(img.width * SPRITE_SCALE);
-  const h = Math.round(img.height * SPRITE_SCALE);
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
   ctx.drawImage(img, Math.round(cx - w / 2), bottom - h, w, h);
   return bottom - h;
 }
@@ -330,23 +336,15 @@ export function drawTeamOffice(
 
   const lead = view.lead;
   const leadImg = art.back[lead.palette % art.back.length][frameFor(lead, t, 0)];
-  const leadTop = drawSprite(ctx, leadImg, LEAD.cx, LEAD.bottom);
-  drawScreen(ctx, LEAD.screen, lead.mood, t, 0);
-  drawPlate(ctx, LEAD.plateCx, LEAD.plateY, lead.label, C.leadPlateBg, C.leadPlateText);
+  const leadTop = drawSprite(ctx, leadImg, LEAD.cx, LEAD.bottom, LEAD_SCALE);
   say(lead, LEAD.cx, leadTop);
 
-  view.members.slice(0, WINGS.length * DESK_ROWS.length).forEach((seat, i) => {
-    const wing = WINGS[i % 2];
-    const row = DESK_ROWS[Math.floor(i / 2)];
+  const members = view.members.slice(0, WINGS.length * DESK_ROWS.length);
+  const seatOf = (i: number) => ({ wing: WINGS[i % 2], row: DESK_ROWS[Math.floor(i / 2)] });
+  members.forEach((seat, i) => {
+    const { wing, row } = seatOf(i);
     const img = art.front[seat.palette % art.front.length][frameFor(seat, t, i + 1)];
-    const top = drawSprite(ctx, img, wing.seatX, row.edge + LEGS_HIDDEN);
-    // The desk in front of them, painted again over their legs.
-    const w = wing.x1 - wing.x0;
-    const h = row.bottom - row.edge;
-    ctx.drawImage(art.room, wing.x0, row.edge, w, h, wing.x0, row.edge, w, h);
-    const screen = { x: wing.screenX, y: row.screenY, w: SCREEN_W, h: SCREEN_H };
-    drawScreen(ctx, screen, seat.mood, t, i + 1);
-    drawPlate(ctx, wing.plateCx, row.plateY - 5, seat.label, C.plateBg, C.plateText);
+    const top = drawSprite(ctx, img, wing.seatX, row.surface + SIT_BELOW_SURFACE, MEMBER_SCALE);
     targets.push({
       x0: wing.x0,
       y0: top - 10,
@@ -355,6 +353,17 @@ export function drawTeamOffice(
       sessionId: seat.sessionId ?? leadId,
     });
     say(seat, wing.seatX, top);
+  });
+
+  // Desks, monitors and the lead's chair back, in front of everyone.
+  ctx.drawImage(art.overlay, 0, 0);
+  drawScreen(ctx, LEAD.screen, lead.mood, t, 0);
+  drawPlate(ctx, LEAD.plateCx, LEAD.plateY, lead.label, C.leadPlateBg, C.leadPlateText);
+  members.forEach((seat, i) => {
+    const { wing, row } = seatOf(i);
+    const screen = { x: wing.screenX, y: row.screenY, w: SCREEN_W, h: SCREEN_H };
+    drawScreen(ctx, screen, seat.mood, t, i + 1);
+    drawPlate(ctx, wing.plateCx, row.plateY - 5, seat.label, C.plateBg, C.plateText);
   });
 
   drawPlate(ctx, BOSS.plateCx, BOSS.plateY, '대표님', C.bossPlateBg, C.plateText);

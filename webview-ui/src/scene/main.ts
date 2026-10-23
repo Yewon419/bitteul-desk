@@ -787,12 +787,13 @@ function openChat(token: string, sessionId: string | null, seat?: number, team?:
 
 async function start(): Promise<void> {
   document.body.style.background = SCENE_PAGE_BG;
-  const [layout, loadedBoard, bg, front, teamRoom] = await Promise.all([
+  const [layout, loadedBoard, bg, front, teamRoom, teamOverlay] = await Promise.all([
     loadJson<SceneLayout>('./scene/scene.json'),
     loadBoard(),
     loadImage('./scene/background.png'),
     loadImage('./scene/front.png'),
     loadImage('./scene/team_office.png'),
+    loadImage('./scene/team_office_front.png'),
     document.fonts.load(FONT_BODY),
     document.fonts.load(FONT_SMALL),
     document.fonts.load(FONT_BOLD),
@@ -1397,7 +1398,7 @@ async function start(): Promise<void> {
         if (office) {
           const out = drawTeamOffice(
             ctx,
-            { room: teamRoom, front: staff.front, back: staff.back },
+            { room: teamRoom, overlay: teamOverlay, front: staff.front, back: staff.back },
             office,
             roomT,
           );
