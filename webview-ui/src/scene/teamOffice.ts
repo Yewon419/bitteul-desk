@@ -1,7 +1,8 @@
 /**
- * The team office: one big room per team, drawn in code instead of a painted background.
- * The MD sits in a glass office at the top, members work at desks in two wings with their
- * names on the desk, and the user's desk at the bottom collects what the team is waiting on.
+ * The team office: one big room per team, painted in `team_office.png`. The MD works in the glass
+ * office at the top, members sit at the desks in two wings with their names on the desk, and the
+ * user's desk at the bottom collects what the team is waiting on. Code draws only what changes:
+ * the people, their names, the state on their monitors, and the board.
  */
 
 import type { TeamStatus } from './api.js';
@@ -69,27 +70,64 @@ export interface TeamBubble {
   sessionId: string | null;
 }
 
-/** Inner room, inside the frame; the sign hangs on the frame above it. */
-const ROOM = { x0: 24, y0: 96, x1: 744, y1: 1320 };
-const WALL_BOTTOM = 300;
-const BOARD = { x0: 48, y0: 120, x1: 208, y1: 284 };
-const WINDOW = { x0: 576, y0: 124, x1: 720, y1: 260 };
-const GLASS = { x0: 232, y0: 110, x1: 536, y1: 420 };
-const LEAD_DESK = { x0: 262, x1: 506, top: 300 };
-/** Member desks: left wing, right wing; rows go down the room. */
-const WING_X = [
-  { x0: 44, x1: 304 },
-  { x0: 464, x1: 724 },
+/** The painted room and the staff sprites drawn into it. */
+export interface TeamOfficeArt {
+  room: HTMLImageElement;
+  front: HTMLImageElement[][];
+  back: HTMLImageElement[][];
+}
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+// Everything below is measured on team_office.png, in room pixels.
+/** The cork board; the team's numbers are pinned on it as a card. */
+const BOARD = { x0: 96, y0: 300, x1: 220, y1: 422 };
+const GLASS = { x0: 242, y0: 182, x1: 522, y1: 460 };
+/** The MD sits on the glass office chair, back to the room, facing its monitor. */
+const LEAD = {
+  cx: 345,
+  bottom: 400,
+  screen: { x: 413, y: 311, w: 58, h: 35 },
+  plateCx: 384,
+  plateY: 428,
+};
+/**
+ * Member desks, two per row. `edge` is the front edge of the desk top: a member's legs go behind
+ * it, so the painted desk from there down is drawn again over them.
+ */
+const DESK_ROWS = [
+  { screenY: 480, edge: 539, bottom: 592, plateY: 556 },
+  { screenY: 635, edge: 693, bottom: 745, plateY: 710 },
+  { screenY: 796, edge: 854, bottom: 907, plateY: 872 },
+  { screenY: 966, edge: 1027, bottom: 1081, plateY: 1045 },
 ];
-const ROW_TOPS = [500, 695, 890, 1085];
-const BOSS_DESK = { x0: 264, x1: 504, top: 1196 };
-const RUG = { x0: 330, y0: 470, x1: 438, y1: 1170 };
-const DESK_TOP_H = 22;
-const DESK_FRONT_H = 54;
-/** How far the character's feet sit below the desk top, hidden by the desk. */
-const SIT_DEPTH = 30;
-const MONITOR_W = 60;
-const MONITOR_H = 44;
+/** Members sit at the outer monitor; the one by the aisle shows how their work is going. */
+const WINGS = [
+  { x0: 62, x1: 310, seatX: 134, screenX: 221, plateCx: 139 },
+  { x0: 456, x1: 706, seatX: 635, screenX: 475, plateCx: 629 },
+];
+const SCREEN_W = 71;
+const SCREEN_H = 38;
+const BOSS = {
+  x0: 208,
+  x1: 557,
+  top: 1078,
+  bottom: 1250,
+  papersCx: 295,
+  plateCx: 500,
+  plateY: 1150,
+};
+/** Staff sprites are painted for the one-person rooms; the team office is drawn smaller. */
+const SPRITE_SCALE = 2 / 3;
+const LEGS_HIDDEN = 12;
+const PLATE_W = 120;
+/** Wider than the painted nameplate, so a short name still covers it. */
+const PLATE_MIN_W = 80;
 const FRAME_A = 0;
 const FRAME_BOUNCE = 1;
 const FRAME_BLINK = 2;
@@ -108,83 +146,6 @@ function box(
   ctx.fillRect(x, y, w, h);
 }
 
-function outline(
-  ctx: CanvasRenderingContext2D,
-  color: string,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  t: number,
-): void {
-  box(ctx, color, x, y, w, t);
-  box(ctx, color, x, y + h - t, w, t);
-  box(ctx, color, x, y, t, h);
-  box(ctx, color, x + w - t, y, t, h);
-}
-
-function drawShell(ctx: CanvasRenderingContext2D, roomW: number, roomH: number): void {
-  box(ctx, C.frame, 0, 0, roomW, roomH);
-  const w = ROOM.x1 - ROOM.x0;
-  box(ctx, C.wall, ROOM.x0, ROOM.y0, w, WALL_BOTTOM - ROOM.y0);
-  box(ctx, C.wallShade, ROOM.x0, WALL_BOTTOM - 14, w, 14);
-  box(ctx, C.floor, ROOM.x0, WALL_BOTTOM, w, ROOM.y1 - WALL_BOTTOM);
-  // Planks: a seam every row, joints staggered so the floor reads as boards.
-  for (let y = WALL_BOTTOM + 6, row = 0; y < ROOM.y1; y += 32, row++) {
-    box(ctx, C.floorSeam, ROOM.x0, y + 30, w, 2);
-    box(ctx, C.floorLight, ROOM.x0, y, w, 2);
-    for (let x = ROOM.x0 + ((row * 97) % 160); x < ROOM.x1; x += 160)
-      box(ctx, C.floorSeam, x, y, 2, 30);
-  }
-  box(ctx, C.trim, ROOM.x0, WALL_BOTTOM, w, 6);
-  outline(ctx, C.frameEdge, ROOM.x0 - 4, ROOM.y0 - 4, w + 8, ROOM.y1 - ROOM.y0 + 8, 4);
-}
-
-function drawWindow(ctx: CanvasRenderingContext2D, t: number): void {
-  const { x0, y0, x1, y1 } = WINDOW;
-  const w = x1 - x0;
-  const h = y1 - y0;
-  box(ctx, C.sky, x0, y0, w, h);
-  box(ctx, C.skyLight, x0, y0 + h * 0.6, w, h * 0.4);
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(x0, y0, w, h);
-  ctx.clip();
-  const drift = Math.floor(t / 400) % (w + 80);
-  for (const [dx, dy, s] of [
-    [10, 30, 1],
-    [90, 70, 0.7],
-  ] as const) {
-    const cx = x0 + ((dx + drift) % (w + 80)) - 40;
-    const cy = y0 + dy;
-    box(ctx, C.cloud, cx, cy, 48 * s, 12 * s);
-    box(ctx, C.cloud, cx + 10 * s, cy - 10 * s, 24 * s, 10 * s);
-  }
-  ctx.restore();
-  outline(ctx, C.windowFrame, x0 - 6, y0 - 6, w + 12, h + 12, 8);
-  box(ctx, C.windowFrame, x0 + w / 2 - 3, y0, 6, h);
-  box(ctx, C.windowFrame, x0, y0 + h / 2 - 3, w, 6);
-}
-
-function drawPlant(ctx: CanvasRenderingContext2D, cx: number, bottom: number): void {
-  box(ctx, C.leafDark, cx - 26, bottom - 96, 20, 40);
-  box(ctx, C.leaf, cx - 8, bottom - 112, 18, 56);
-  box(ctx, C.leafDark, cx + 8, bottom - 92, 22, 36);
-  box(ctx, C.leaf, cx - 20, bottom - 72, 40, 24);
-  box(ctx, C.potEdge, cx - 26, bottom - 52, 52, 52);
-  box(ctx, C.pot, cx - 22, bottom - 48, 44, 44);
-}
-
-function drawRug(ctx: CanvasRenderingContext2D): void {
-  const { x0, y0, x1, y1 } = RUG;
-  box(ctx, C.rugEdge, x0, y0, x1 - x0, y1 - y0);
-  box(ctx, C.rug, x0 + 6, y0 + 6, x1 - x0 - 12, y1 - y0 - 12);
-  const mid = (x0 + x1) / 2;
-  for (let y = y0 + 30; y < y1 - 30; y += 44) {
-    [4, 12, 20, 12, 4].forEach((w, i) => box(ctx, C.rugPattern, mid - w / 2, y - 10 + i * 4, w, 4));
-  }
-}
-
 function boardState(team: TeamStatus): { text: string; warn: boolean } {
   if (team.ended) return { text: '끝남', warn: false };
   if (team.budgetStopped) return { text: '예산 소진', warn: true };
@@ -197,65 +158,56 @@ function drawBoard(ctx: CanvasRenderingContext2D, view: TeamOfficeView): void {
   const { x0, y0, x1, y1 } = BOARD;
   const w = x1 - x0;
   const team = view.team;
-  box(ctx, C.frameEdge, x0 - 4, y0 - 4, w + 8, y1 - y0 + 8);
   box(ctx, WALL_BG, x0, y0, w, y1 - y0);
   const mid = x0 + w / 2;
-  const maxW = w - 16;
+  const maxW = w - 12;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillStyle = WALL_TITLE;
   ctx.font = FONT_BOARD_TITLE;
-  ctx.fillText(team.name, mid, y0 + 10, maxW);
+  ctx.fillText(team.name, mid, y0 + 8, maxW);
   const state = boardState(team);
   ctx.fillStyle = state.warn ? WALL_ACCENT : WALL_VALUE;
   ctx.font = FONT_BOARD_VALUE;
-  ctx.fillText(state.text, mid, y0 + 38, maxW);
+  ctx.fillText(state.text, mid, y0 + 32, maxW);
   ctx.fillStyle = WALL_LABEL;
   ctx.font = FONT_BOARD_LABEL;
-  ctx.fillText('예산', mid, y0 + 70, maxW);
+  ctx.fillText('예산', mid, y0 + 56, maxW);
   ctx.fillStyle = WALL_VALUE;
   ctx.font = FONT_BOARD_VALUE;
   const budget = team.budgetUsd;
   ctx.fillText(
     budget ? `$${team.costUsd.toFixed(2)} / $${budget}` : `$${team.costUsd.toFixed(2)}`,
     mid,
-    y0 + 88,
+    y0 + 72,
     maxW,
   );
   if (budget) {
     const ratio = Math.min(1, team.costUsd / budget);
-    box(ctx, WALL_GAUGE_TRACK, x0 + 8, y0 + 112, maxW, 8);
+    box(ctx, WALL_GAUGE_TRACK, x0 + 6, y0 + 92, maxW, 6);
     box(
       ctx,
       team.budgetStopped ? C.screenFailed : ratio >= 0.8 ? WALL_ACCENT : WALL_GAUGE_FILL,
-      x0 + 8,
-      y0 + 112,
+      x0 + 6,
+      y0 + 92,
       Math.round(maxW * ratio),
-      8,
+      6,
     );
   }
   const busy = [view.lead, ...view.members].filter((s) => s.mood === 'working').length;
   ctx.fillStyle = WALL_LABEL;
   ctx.font = FONT_BOARD_LABEL;
-  ctx.fillText(`일하는 중 ${busy}/${view.members.length + 1}명`, mid, y0 + 134, maxW);
+  ctx.fillText(`일하는 중 ${busy}/${view.members.length + 1}명`, mid, y0 + 104, maxW);
 }
 
-function drawMonitor(
+/** A painted monitor's screen, lit up with how the work is going. */
+function drawScreen(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  deskTop: number,
+  { x: sx, y: sy, w: sw, h: sh }: Rect,
   mood: DeskMood,
   t: number,
   seed: number,
 ): void {
-  const y = deskTop - MONITOR_H - 10;
-  box(ctx, C.monitorStand, x + MONITOR_W / 2 - 5, y + MONITOR_H, 10, 12);
-  box(ctx, C.monitorStand, x + MONITOR_W / 2 - 14, deskTop - 2, 28, 4);
-  box(ctx, C.monitor, x, y, MONITOR_W, MONITOR_H);
-  const sx = x + 4;
-  const sy = y + 4;
-  const sw = MONITOR_W - 8;
-  const sh = MONITOR_H - 8;
   const fill: Record<DeskMood, string> = {
     working: SCREEN_ON_BG,
     alert: SCREEN_ALERT_BG,
@@ -304,25 +256,16 @@ function drawMonitor(
   }
 }
 
-function drawDesk(ctx: CanvasRenderingContext2D, x0: number, x1: number, top: number): void {
-  const w = x1 - x0;
-  box(ctx, C.deskEdge, x0 - 3, top - 3, w + 6, DESK_TOP_H + DESK_FRONT_H + 6);
-  box(ctx, C.deskTop, x0, top, w, DESK_TOP_H);
-  box(ctx, C.deskFront, x0, top + DESK_TOP_H, w, DESK_FRONT_H);
-  box(ctx, C.deskEdge, x0, top + DESK_TOP_H, w, 3);
-}
-
 function drawPlate(
   ctx: CanvasRenderingContext2D,
   cx: number,
   y: number,
   text: string,
-  maxW: number,
   bg: string,
   fg: string,
 ): void {
   ctx.font = FONT_PLATE;
-  const w = Math.min(maxW, Math.ceil(ctx.measureText(text).width) + 24);
+  const w = Math.max(PLATE_MIN_W, Math.min(PLATE_W, Math.ceil(ctx.measureText(text).width) + 24));
   const x = Math.round(cx - w / 2);
   box(ctx, C.plateEdge, x - 3, y - 3, w + 6, 34);
   box(ctx, bg, x, y, w, 28);
@@ -330,11 +273,6 @@ function drawPlate(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, cx, y + 15, w - 12);
-}
-
-function drawChairBack(ctx: CanvasRenderingContext2D, cx: number, top: number, h: number): void {
-  box(ctx, C.chairEdge, cx - 48, top, 96, h);
-  box(ctx, C.chair, cx - 44, top + 4, 88, h - 8);
 }
 
 function frameFor(seat: TeamSeat, t: number, seed: number): number {
@@ -345,112 +283,37 @@ function frameFor(seat: TeamSeat, t: number, seed: number): number {
   return FRAME_A;
 }
 
-/** One person at a desk: chair, character, desk, monitor and name. Returns the sprite's top. */
-function drawWorkstation(
+/** One sprite, scaled to the office, standing on `bottom`. Returns its top. */
+function drawSprite(
   ctx: CanvasRenderingContext2D,
-  seat: TeamSeat,
-  faces: HTMLImageElement[][],
-  desk: { x0: number; x1: number; top: number },
+  img: HTMLImageElement,
   cx: number,
-  monitorX: number,
-  plate: { bg: string; fg: string },
-  t: number,
-  seed: number,
+  bottom: number,
 ): number {
-  const img = faces[seat.palette % faces.length][frameFor(seat, t, seed)];
-  const spriteTop = desk.top + SIT_DEPTH - img.height;
-  ctx.drawImage(img, Math.round(cx - img.width / 2), spriteTop);
-  drawDesk(ctx, desk.x0, desk.x1, desk.top);
-  drawMonitor(ctx, monitorX, desk.top, seat.mood, t, seed);
-  drawPlate(
-    ctx,
-    cx,
-    desk.top + DESK_TOP_H + 12,
-    seat.label,
-    desk.x1 - desk.x0 - 16,
-    plate.bg,
-    plate.fg,
-  );
-  return spriteTop;
-}
-
-function drawGlassOffice(
-  ctx: CanvasRenderingContext2D,
-  view: TeamOfficeView,
-  faces: HTMLImageElement[][],
-  t: number,
-): number {
-  const { x0, y0, x1, y1 } = GLASS;
-  box(ctx, C.leadFloor, x0, WALL_BOTTOM, x1 - x0, y1 - WALL_BOTTOM);
-  const top = drawWorkstation(
-    ctx,
-    view.lead,
-    faces,
-    { x0: LEAD_DESK.x0, x1: LEAD_DESK.x1, top: LEAD_DESK.top },
-    360,
-    436,
-    { bg: C.leadPlateBg, fg: C.leadPlateText },
-    t,
-    0,
-  );
-  // Glass: side panes full height, a low front pane so the MD stays in view.
-  box(ctx, C.glass, x0, y0, 12, y1 - y0);
-  box(ctx, C.glass, x1 - 12, y0, 12, y1 - y0);
-  box(ctx, C.glass, x0 + 12, y1 - 44, x1 - x0 - 24, 44);
-  for (let i = 0; i < 3; i++) box(ctx, C.glassShine, x0 + 40 + i * 110, y1 - 40, 18, 4);
-  box(ctx, C.glassFrame, x0, y0, x1 - x0, 6);
-  box(ctx, C.glassFrame, x0, y1 - 4, x1 - x0, 4);
-  box(ctx, C.glassFrame, x0, y0, 4, y1 - y0);
-  box(ctx, C.glassFrame, x1 - 4, y0, 4, y1 - y0);
-  box(ctx, C.glassFrame, x0 + 8, y1 - 46, x1 - x0 - 16, 3);
-  return top;
-}
-
-function drawBossDesk(ctx: CanvasRenderingContext2D, pending: number, t: number): void {
-  const { x0, x1, top } = BOSS_DESK;
-  drawDesk(ctx, x0, x1, top);
-  // The in-tray: one sheet per thing waiting, up to a small pile.
-  const sheets = Math.min(pending, 5);
-  for (let i = 0; i < sheets; i++) {
-    box(ctx, C.paperLine, x0 + 22, top - 6 - i * 6, 54, 6);
-    box(ctx, C.paper, x0 + 24, top - 6 - i * 6, 50, 4);
-  }
-  drawMonitor(ctx, x1 - 84, top, pending > 0 ? 'alert' : 'resting', t, 99);
-  drawPlate(
-    ctx,
-    (x0 + x1) / 2,
-    top + DESK_TOP_H + 12,
-    '대표님',
-    x1 - x0 - 16,
-    C.bossPlateBg,
-    C.plateText,
-  );
-  drawChairBack(ctx, (x0 + x1) / 2, top + DESK_TOP_H + DESK_FRONT_H + 8, 40);
+  const w = Math.round(img.width * SPRITE_SCALE);
+  const h = Math.round(img.height * SPRITE_SCALE);
+  ctx.drawImage(img, Math.round(cx - w / 2), bottom - h, w, h);
+  return bottom - h;
 }
 
 /**
- * Draw one team's office in room coordinates (`roomW` x `roomH`). Returns the click targets and
- * the speech bubbles, which the caller draws over everything else.
+ * Draw one team's office in room coordinates. Returns the click targets and the speech bubbles,
+ * which the caller draws over everything else.
  */
 export function drawTeamOffice(
   ctx: CanvasRenderingContext2D,
-  roomW: number,
-  roomH: number,
+  art: TeamOfficeArt,
   view: TeamOfficeView,
-  faces: HTMLImageElement[][],
   t: number,
 ): { targets: TeamTarget[]; bubbles: TeamBubble[] } {
   ctx.save();
-  drawShell(ctx, roomW, roomH);
-  drawWindow(ctx, t);
-  drawRug(ctx);
-  drawPlant(ctx, 70, ROOM.y1 - 12);
-  drawPlant(ctx, 698, ROOM.y1 - 12);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(art.room, 0, 0);
   drawBoard(ctx, view);
   const leadId = view.lead.sessionId;
   const targets: TeamTarget[] = [
     { ...BOARD, sessionId: leadId },
-    { x0: GLASS.x0, y0: GLASS.y0, x1: GLASS.x1, y1: GLASS.y1, sessionId: leadId },
+    { ...GLASS, sessionId: leadId },
   ];
   const bubbles: TeamBubble[] = [];
   const say = (seat: TeamSeat, cx: number, top: number): void => {
@@ -464,46 +327,42 @@ export function drawTeamOffice(
       });
     }
   };
-  say(view.lead, 360, drawGlassOffice(ctx, view, faces, t));
-  view.members.slice(0, WING_X.length * ROW_TOPS.length).forEach((seat, i) => {
-    const side = i % 2;
-    const wing = WING_X[side];
-    const top = ROW_TOPS[Math.floor(i / 2)];
-    // Characters sit toward the aisle's far side; monitors face the aisle.
-    const cx = side === 0 ? wing.x0 + 96 : wing.x1 - 96;
-    const monitorX = side === 0 ? wing.x1 - MONITOR_W - 14 : wing.x0 + 14;
-    const spriteTop = drawWorkstation(
-      ctx,
-      seat,
-      faces,
-      { ...wing, top },
-      cx,
-      monitorX,
-      { bg: C.plateBg, fg: C.plateText },
-      t,
-      i + 1,
-    );
+
+  const lead = view.lead;
+  const leadImg = art.back[lead.palette % art.back.length][frameFor(lead, t, 0)];
+  const leadTop = drawSprite(ctx, leadImg, LEAD.cx, LEAD.bottom);
+  drawScreen(ctx, LEAD.screen, lead.mood, t, 0);
+  drawPlate(ctx, LEAD.plateCx, LEAD.plateY, lead.label, C.leadPlateBg, C.leadPlateText);
+  say(lead, LEAD.cx, leadTop);
+
+  view.members.slice(0, WINGS.length * DESK_ROWS.length).forEach((seat, i) => {
+    const wing = WINGS[i % 2];
+    const row = DESK_ROWS[Math.floor(i / 2)];
+    const img = art.front[seat.palette % art.front.length][frameFor(seat, t, i + 1)];
+    const top = drawSprite(ctx, img, wing.seatX, row.edge + LEGS_HIDDEN);
+    // The desk in front of them, painted again over their legs.
+    const w = wing.x1 - wing.x0;
+    const h = row.bottom - row.edge;
+    ctx.drawImage(art.room, wing.x0, row.edge, w, h, wing.x0, row.edge, w, h);
+    const screen = { x: wing.screenX, y: row.screenY, w: SCREEN_W, h: SCREEN_H };
+    drawScreen(ctx, screen, seat.mood, t, i + 1);
+    drawPlate(ctx, wing.plateCx, row.plateY - 5, seat.label, C.plateBg, C.plateText);
     targets.push({
       x0: wing.x0,
-      y0: spriteTop - 20,
+      y0: top - 10,
       x1: wing.x1,
-      y1: top + DESK_TOP_H + DESK_FRONT_H,
+      y1: row.bottom,
       sessionId: seat.sessionId ?? leadId,
     });
-    say(seat, cx, spriteTop);
+    say(seat, wing.seatX, top);
   });
-  drawBossDesk(ctx, view.pending, t);
-  targets.push({
-    x0: BOSS_DESK.x0,
-    y0: BOSS_DESK.top - 60,
-    x1: BOSS_DESK.x1,
-    y1: BOSS_DESK.top + DESK_TOP_H + DESK_FRONT_H,
-    sessionId: leadId,
-  });
+
+  drawPlate(ctx, BOSS.plateCx, BOSS.plateY, '대표님', C.bossPlateBg, C.plateText);
+  targets.push({ x0: BOSS.x0, y0: BOSS.top - 40, x1: BOSS.x1, y1: BOSS.bottom, sessionId: leadId });
   if (view.pending > 0) {
     bubbles.push({
-      cx: (BOSS_DESK.x0 + BOSS_DESK.x1) / 2,
-      bottom: BOSS_DESK.top - 40,
+      cx: BOSS.papersCx,
+      bottom: BOSS.top,
       text: `확인할 것 ${view.pending}건`,
       alert: true,
       sessionId: null,
