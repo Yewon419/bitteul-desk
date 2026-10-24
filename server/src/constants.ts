@@ -117,6 +117,8 @@ export const PUSH_DEDUPE_MS = 20_000;
 export const PUSH_TTL_SECONDS = 3600;
 /** One retry for a push service hiccup (5xx or network), after this pause. */
 export const PUSH_RETRY_DELAY_MS = 2000;
+/** A finished turn's alert shows the end of the reply, where a next-step question sits. */
+export const PUSH_DONE_BODY_MAX_CHARS = 300;
 /** VAPID contact. Apple rejects keys whose subject is not a mailto: or a public https URL. */
 export const PUSH_VAPID_SUBJECT = 'https://github.com/Yewon419/bitteul-desk';
 export const PUSH_KEYS_FILE = 'bitteul-push-vapid.json';

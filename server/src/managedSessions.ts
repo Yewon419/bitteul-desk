@@ -334,7 +334,8 @@ export function parseQuestions(input: Record<string, unknown>): Question[] | nul
 /** Something that now waits on the user, raised so the phone can be told. */
 export type ManagedAlert =
   | { kind: 'ask'; ask: PermissionAsk }
-  | { kind: 'budget'; sessionId: string; member: string; costUsd: number; budgetUsd: number };
+  | { kind: 'budget'; sessionId: string; member: string; costUsd: number; budgetUsd: number }
+  | { kind: 'done'; sessionId: string; reply: string };
 
 export class ManagedSessions {
   private readonly sessions = new Map<string, Managed>();
@@ -1149,6 +1150,9 @@ export class ManagedSessions {
               if (s) {
                 s.busy = false;
                 s.turn = null;
+              }
+              if (m.subtype === 'success' && !m.is_error) {
+                this.alertListener?.({ kind: 'done', sessionId, reply: m.result });
               }
               if (s?.team) {
                 s.costUsd = m.total_cost_usd;

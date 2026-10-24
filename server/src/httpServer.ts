@@ -19,6 +19,7 @@ import { handleClientMessage } from './clientMessageHandler.js';
 import {
   HOOK_API_PREFIX,
   MAX_HOOK_BODY_SIZE,
+  PUSH_DONE_BODY_MAX_CHARS,
   WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_CLOSE_UNAUTHORIZED,
 } from './constants.js';
@@ -230,7 +231,22 @@ function registerDashboardRoutes(
     }
     return null;
   };
-  registerPushRoutes(app, options, managed, titleOf);
+  const lastReplyOf = (sessionId: string): string | null => {
+    for (const agent of options.store.values()) {
+      if (sessionOf(agent) !== sessionId) continue;
+      try {
+        const entries = conversations.get(agent.jsonlFile).entries;
+        for (let i = entries.length - 1; i >= 0; i--) {
+          if (entries[i].kind === 'assistant') return entries[i].text;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+  registerPushRoutes(app, options, managed, titleOf, lastReplyOf);
 
   /** Text plus attachments as one user turn; only files this server saved may be attached. */
   const turnContent = (
@@ -931,12 +947,21 @@ async function sendOrFail<T>(reply: FastifyReply, run: () => Promise<T>): Promis
   }
 }
 
+/** The end of a reply, where a "shall I go on?" question usually sits. */
+function replyTail(reply: string): string {
+  const text = reply.trim().replace(/\s+/g, ' ');
+  return text.length <= PUSH_DONE_BODY_MAX_CHARS
+    ? text
+    : `…${text.slice(-(PUSH_DONE_BODY_MAX_CHARS - 1))}`;
+}
+
 /** Phone alerts: the page subscribes here, and anything that waits on the user is pushed. */
 function registerPushRoutes(
   app: FastifyInstance,
   options: HttpServerOptions,
   managed: ManagedSessions | null,
   titleOf: (sessionId: string) => string | null,
+  lastReplyOf: (sessionId: string) => string | null,
 ): void {
   if (options.embedded) return;
   const auth = { preHandler: bearerAuth(options.token) };
@@ -1000,6 +1025,18 @@ function registerPushRoutes(
       );
       return;
     }
+    if (alert.kind === 'done') {
+      push.notify(
+        {
+          title: `${titleOf(alert.sessionId) ?? '직원'} 작업 끝`,
+          body: replyTail(alert.reply),
+          sessionId: alert.sessionId,
+          tag: `done:${alert.sessionId}`,
+        },
+        [alert.sessionId],
+      );
+      return;
+    }
     const { ask } = alert;
     const name = ask.member ?? titleOf(ask.sessionId) ?? '직원';
     const [title, body] = ask.plan
@@ -1016,9 +1053,29 @@ function registerPushRoutes(
     push.notify({ title, body, sessionId: ask.sessionId, tag: `ask:${ask.sessionId}` }, shownIn);
   });
 
-  // Terminal sessions: only the PermissionRequest hook counts. Without hooks a transcript
-  // timer guesses from silence, and any long-running command would buzz the phone.
+  // Terminal sessions: only hook signals count. Without hooks a transcript timer guesses
+  // from silence, and any long-running command or pause would buzz the phone.
   options.store.on('broadcast', (message) => {
+    if (message.type === 'agentStatus') {
+      // The Stop hook ("done"); the later idle reminder (awaitingInput) would repeat it.
+      if (message.status !== 'waiting' || message.awaitingInput !== false) return;
+      if (typeof message.id !== 'number') return;
+      const agent = options.store.get(message.id);
+      // Teammates report to their lead; only the lead's finished turn is the user's to read.
+      if (!agent?.hookDelivered || agent.leadAgentId !== undefined) return;
+      const sessionId = path.basename(agent.jsonlFile, '.jsonl');
+      if (managed && managed.owner(sessionId, new Set()) !== 'none') return;
+      push.notify(
+        {
+          title: `${titleOf(sessionId) ?? agent.folderName ?? '직원'} 작업 끝`,
+          body: replyTail(lastReplyOf(sessionId) ?? '터미널에서 다음 지시를 기다리고 있어요.'),
+          sessionId,
+          tag: `done:${sessionId}`,
+        },
+        [sessionId],
+      );
+      return;
+    }
     if (message.type !== 'agentToolPermission' || typeof message.id !== 'number') return;
     const agent = options.store.get(message.id);
     if (!agent) return;
