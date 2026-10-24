@@ -96,7 +96,7 @@ import {
   stepBody,
 } from './idle.js';
 import { READING_TOOLS, toolLabel } from './labels.js';
-import { pushIsOn, pushSupport, reportSeen, turnPushOff, turnPushOn } from './push.js';
+import { pushIsOn, pushSupport, turnPushOff, turnPushOn } from './push.js';
 import { dropMoves, planSeats, type SeatPlan } from './seating.js';
 import { initTeamModal, type TeamRoomPick } from './teamModal.js';
 import {
@@ -1043,7 +1043,6 @@ async function start(): Promise<void> {
       pair.addEventListener('click', () => void showPairing(token));
     }
     setupPush(token);
-    reportSeen(token);
     document.getElementById('pair-close')?.addEventListener('click', hidePairing);
     document.getElementById('pair-modal')?.addEventListener('click', (ev) => {
       if (ev.target === ev.currentTarget) hidePairing();

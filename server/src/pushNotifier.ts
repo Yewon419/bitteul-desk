@@ -59,7 +59,8 @@ function isSubscription(value: unknown): value is webpush.PushSubscription {
 export class PushNotifier {
   private readonly keys: VapidKeys;
   private subscriptions: webpush.PushSubscription[];
-  private lastSeen = 0;
+  /** When a chat page last reported the user active on it, per session. */
+  private readonly lastSeen = new Map<string, number>();
   private readonly lastSent = new Map<string, number>();
 
   constructor(
@@ -127,17 +128,21 @@ export class PushNotifier {
     }
   }
 
-  /** A page on screen checks in; while it does, alerts stay in the page. */
-  markSeen(): void {
-    this.lastSeen = Date.now();
+  /** A chat page the user is actively on checks in; its session's alerts stay in the page. */
+  markSeen(sessionId: string): void {
+    this.lastSeen.set(sessionId, Date.now());
   }
 
-  /** Fire and forget: failures are logged with the push service's answer. */
-  notify(alert: PushAlert): void {
+  /**
+   * Fire and forget: failures are logged with the push service's answer. `shownIn` lists the
+   * chat sessions that display this alert; if the user is active on any of them, it is skipped.
+   */
+  notify(alert: PushAlert, shownIn: readonly string[]): void {
     const now = Date.now();
     if (this.subscriptions.length === 0) return;
-    if (now - this.lastSeen < PUSH_SEEN_WINDOW_MS) {
-      this.log('push skipped: page on screen', { tag: alert.tag });
+    const watching = shownIn.find((id) => now - (this.lastSeen.get(id) ?? 0) < PUSH_SEEN_WINDOW_MS);
+    if (watching !== undefined) {
+      this.log('push skipped: chat on screen', { tag: alert.tag, session: watching });
       return;
     }
     const last = this.lastSent.get(alert.tag);

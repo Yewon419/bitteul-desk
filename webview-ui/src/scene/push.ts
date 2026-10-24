@@ -6,6 +6,7 @@
 
 import { fetchJson, postJson } from './api.js';
 import {
+  PUSH_ACTIVE_WINDOW_MS,
   PUSH_SEEN_INTERVAL_MS,
   PUSH_SW_URL,
   PUSH_TOKEN_CACHE,
@@ -76,15 +77,31 @@ export async function turnPushOff(token: string): Promise<void> {
   await sub.unsubscribe();
 }
 
-/** While this page is visible, alerts stay in the page instead of buzzing the phone. */
-export function reportSeen(token: string): void {
+/**
+ * While the user is actually on this chat (front tab, touched or typed in the last minute),
+ * that session's alerts stay in the page. A screen left open on an empty desk, a tab in the
+ * background and other members' chats don't hold anything back.
+ */
+export function reportSeen(token: string, session: () => string | null): void {
+  let lastInput = Date.now();
   const ping = (): void => {
-    if (document.visibilityState !== 'visible') return;
-    postJson('./api/push/seen', token, {}).catch((err: unknown) => {
+    const sessionId = session();
+    if (!sessionId || document.visibilityState !== 'visible') return;
+    if (Date.now() - lastInput > PUSH_ACTIVE_WINDOW_MS) return;
+    postJson('./api/push/seen', token, { sessionId }).catch((err: unknown) => {
       console.warn('[Webview] push seen ping failed', err);
     });
   };
+  const touched = (): void => {
+    lastInput = Date.now();
+  };
+  for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'scroll'] as const) {
+    window.addEventListener(type, touched, { capture: true, passive: true });
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') touched();
+    ping();
+  });
   ping();
   setInterval(ping, PUSH_SEEN_INTERVAL_MS);
-  document.addEventListener('visibilitychange', ping);
 }

@@ -104,6 +104,8 @@ export const COMPACT_MAX_WIDTH_PX = 900;
 export const SAME_TAB_CHAT_MEDIA = '(max-width: 900px), (pointer: coarse)';
 /** A visible page tells the PC this often that the user is looking (the PC waits 45s). */
 export const PUSH_SEEN_INTERVAL_MS = 20_000;
+/** A chat counts as watched only this long after the last touch, key or scroll. */
+export const PUSH_ACTIVE_WINDOW_MS = 60_000;
 export const PUSH_SW_URL = './sw.js';
 /** Where the page leaves the token for the service worker (sw.js reads the same names). */
 export const PUSH_TOKEN_CACHE = 'bitteul-push';

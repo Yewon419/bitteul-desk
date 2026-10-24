@@ -135,7 +135,7 @@ interface MemberUsage {
 export type SessionOwner = 'dashboard' | 'terminal' | 'teammate' | 'none';
 
 /** A subagent's transcript is `subagents/agent-<agentId>.jsonl`; its basename is its session key. */
-const MEMBER_SESSION_PREFIX = 'agent-';
+export const MEMBER_SESSION_PREFIX = 'agent-';
 
 /** Permission modes the chat window offers; bypassPermissions and dontAsk stay off the menu. */
 export const DASHBOARD_MODES = ['auto', 'default', 'acceptEdits', 'plan'] as const;

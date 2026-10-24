@@ -35,6 +35,7 @@ import {
   type DashboardMode,
   DashboardSessionError,
   ManagedSessions,
+  MEMBER_SESSION_PREFIX,
   resolveClaudeExecutable,
 } from './managedSessions.js';
 import { describeMedia, MAX_PREVIEW_BYTES, mediaType } from './mediaPreview.js';
@@ -968,19 +969,35 @@ function registerPushRoutes(
       return { ok: true };
     },
   );
-  app.post('/api/push/seen', auth, async () => {
-    push.markSeen();
-    return { ok: true };
-  });
+  app.post<{ Body: { sessionId: string } }>(
+    '/api/push/seen',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['sessionId'],
+          properties: { sessionId: { type: 'string', minLength: 1, maxLength: 200 } },
+        },
+      },
+    },
+    async (request) => {
+      push.markSeen(request.body.sessionId);
+      return { ok: true };
+    },
+  );
 
   managed?.onAlert((alert) => {
     if (alert.kind === 'budget') {
-      push.notify({
-        title: `${alert.member} 예산 소진`,
-        body: `$${alert.costUsd.toFixed(2)} / $${alert.budgetUsd.toFixed(2)}에서 팀이 멈췄어요.`,
-        sessionId: alert.sessionId,
-        tag: `budget:${alert.sessionId}`,
-      });
+      push.notify(
+        {
+          title: `${alert.member} 예산 소진`,
+          body: `$${alert.costUsd.toFixed(2)} / $${alert.budgetUsd.toFixed(2)}에서 팀이 멈췄어요.`,
+          sessionId: alert.sessionId,
+          tag: `budget:${alert.sessionId}`,
+        },
+        [alert.sessionId],
+      );
       return;
     }
     const { ask } = alert;
@@ -992,7 +1009,11 @@ function registerPushRoutes(
         : ask.chatter !== undefined
           ? [`${name} 확인 필요`, ask.summary]
           : [`${name} 승인 요청`, ask.summary];
-    push.notify({ title, body, sessionId: ask.sessionId, tag: `ask:${ask.sessionId}` });
+    // A member's ask shows in the team chat and in that member's own chat.
+    const shownIn = ask.agentId
+      ? [ask.sessionId, MEMBER_SESSION_PREFIX + ask.agentId]
+      : [ask.sessionId];
+    push.notify({ title, body, sessionId: ask.sessionId, tag: `ask:${ask.sessionId}` }, shownIn);
   });
 
   // Terminal sessions: only the PermissionRequest hook counts. Without hooks a transcript
@@ -1006,12 +1027,15 @@ function registerPushRoutes(
     const sessionId = path.basename(agent.jsonlFile, '.jsonl');
     // Dashboard sessions already raised their own, more specific alert.
     if (managed && managed.owner(sessionId, new Set()) !== 'none') return;
-    push.notify({
-      title: `${titleOf(sessionId) ?? agent.folderName ?? '직원'} 승인 대기`,
-      body: '터미널에서 승인을 기다리고 있어요.',
-      sessionId,
-      tag: `ask:${sessionId}`,
-    });
+    push.notify(
+      {
+        title: `${titleOf(sessionId) ?? agent.folderName ?? '직원'} 승인 대기`,
+        body: '터미널에서 승인을 기다리고 있어요.',
+        sessionId,
+        tag: `ask:${sessionId}`,
+      },
+      [sessionId],
+    );
   });
 }
 
