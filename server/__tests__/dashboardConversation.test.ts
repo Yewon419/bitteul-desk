@@ -350,36 +350,30 @@ describe('dashboard routes', () => {
         headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify(body),
       });
-    expect((await save({ boardTitle: '해킹' }, {})).status).toBe(401);
+    expect((await save({ boardText: '해킹' }, {})).status).toBe(401);
 
-    fs.writeFileSync(file, JSON.stringify({ userName: '대표님', salaryTarget: 100 }));
-    const saved = await save({
-      boardTitle: '빛뜰 컴퍼니',
-      countdownLabel: '출시까지',
-      countdownDate: '2026-12-31',
-      salaryTarget: null,
-    });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ userName: '대표님', boardTitle: '옛 제목', salaryTarget: 100 }),
+    );
+    const saved = await save({ boardText: '  오늘 할 일\n- 아무거나  ' });
     expect(saved.status).toBe(200);
     expect(((await saved.json()) as { board: object }).board).toEqual({
-      title: '빛뜰 컴퍼니',
-      countdown: { label: '출시까지', date: '2026-12-31' },
-      salary: null,
+      text: '오늘 할 일\n- 아무거나',
     });
+    // The old fixed-layout fields go the first time the board is saved.
     const onDisk = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>;
-    expect(onDisk).toEqual({
-      userName: '대표님',
-      boardTitle: '빛뜰 컴퍼니',
-      countdownLabel: '출시까지',
-      countdownDate: '2026-12-31',
-    });
+    expect(onDisk).toEqual({ userName: '대표님', boardText: '오늘 할 일\n- 아무거나' });
 
     const before = fs.readFileSync(file, 'utf-8');
-    const bad = await save({ countdownDate: '내일' });
-    expect(bad.status).toBe(400);
+    expect((await save({ boardText: 'x'.repeat(301) })).status).toBe(400);
     expect(fs.readFileSync(file, 'utf-8')).toBe(before);
     // Fields outside the board are stripped by the schema, never written.
     expect((await save({ nickname: 'x' })).status).toBe(200);
     expect(fs.readFileSync(file, 'utf-8')).not.toContain('nickname');
+
+    expect((await save({ boardText: null })).status).toBe(200);
+    expect(JSON.parse(fs.readFileSync(file, 'utf-8'))).toEqual({ userName: '대표님' });
   });
 
   it('guards interrupt and question answers with the token, and refuses them inside VS Code', async () => {
@@ -459,30 +453,28 @@ describe('dashboard routes', () => {
     };
     expect(await profile()).toEqual({
       status: 200,
-      body: { userName: '나', board: { title: '빛뜰 데스크', countdown: null, salary: null } },
+      body: { userName: '나', board: { text: '' } },
     });
 
     const file = path.join(dir, 'profile.json');
+    // Old fixed-layout fields are ignored, not rejected.
     fs.writeFileSync(
       file,
-      JSON.stringify({ userName: ' 팀장님 ', countdownDate: '2027-08-31', salaryTarget: 100 }),
+      JSON.stringify({
+        userName: ' 팀장님 ',
+        boardText: '첫 줄\n둘째 줄',
+        countdownDate: '다음 달',
+      }),
     );
     expect(await profile()).toEqual({
       status: 200,
-      body: {
-        userName: '팀장님',
-        board: {
-          title: '빛뜰 데스크',
-          countdown: { label: '마감까지', date: '2027-08-31' },
-          salary: { thisMonth: 0, target: 100 },
-        },
-      },
+      body: { userName: '팀장님', board: { text: '첫 줄\n둘째 줄' } },
     });
 
-    fs.writeFileSync(file, JSON.stringify({ countdownDate: '다음 달' }));
+    fs.writeFileSync(file, JSON.stringify({ boardText: 7 }));
     const broken = await profile();
     expect(broken.status).toBe(500);
-    expect(String(broken.body.error)).toContain('countdownDate');
+    expect(String(broken.body.error)).toContain('boardText');
     expect(String(broken.body.error)).toContain(file);
   });
 });

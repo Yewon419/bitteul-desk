@@ -631,7 +631,9 @@
         gap: 4px;
         font-size: 13px;
       }
-      #board-form input {
+      #board-form textarea {
+        resize: vertical;
+        line-height: 1.5;
         box-sizing: border-box;
         width: 100%;
         font: inherit;
@@ -765,21 +767,17 @@
         <h2 id="board-heading">벽 게시판</h2>
         <canvas id="board-preview" aria-label="벽 게시판 미리보기"></canvas>
         <form id="board-form" hidden>
-          <label>제목 <input name="boardTitle" maxlength="20" placeholder="빛뜰 데스크" /></label>
           <label
-            >D-day 이름 <input name="countdownLabel" maxlength="20" placeholder="마감까지"
-          /></label>
-          <label>D-day 날짜 <input name="countdownDate" type="date" /></label>
-          <label
-            >이번 달 월급
-            <input name="salaryThisMonth" type="number" min="0" step="1000" inputmode="numeric"
-          /></label>
-          <label
-            >목표 월급
-            <input name="salaryTarget" type="number" min="0" step="1000" inputmode="numeric"
-          /></label>
+            >게시판에 쓸 말
+            <textarea
+              name="boardText"
+              rows="7"
+              maxlength="300"
+              placeholder="아무거나 쓰세요"
+            ></textarea>
+          </label>
           <p class="board-hint">
-            날짜를 비우면 D-day가, 목표 월급을 비우면 월급 게이지가 게시판에서 빠져요.
+            줄바꿈도 그대로 보여요. 글이 길면 글자가 작아져요. 다 지우고 저장하면 게시판이 비어요.
           </p>
           <p id="board-error"></p>
           <div class="board-actions">

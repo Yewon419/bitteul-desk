@@ -68,6 +68,30 @@ export class SceneState {
     this.save();
   }
 
+  /**
+   * Replace the whole arrangement: `seats` is every seated session, so a session left out
+   * (gone home) loses its old seat and cannot reopen a far room when it comes back.
+   */
+  arrange(seats: SeatMove[], rooms: Record<string, string>): void {
+    const used = new Set<number>();
+    for (const { seat } of seats) {
+      if (!Number.isInteger(seat) || seat < 0) throw new Error(`invalid seat ${seat}`);
+      if (used.has(seat)) throw new Error(`seat ${seat} given twice`);
+      used.add(seat);
+    }
+    const nextRooms: Record<string, string> = {};
+    for (const [index, title] of Object.entries(rooms)) {
+      if (!/^[0-9]{1,3}$/.test(index)) throw new Error(`invalid room ${index}`);
+      const clean = title.trim().slice(0, MAX_ROOM_TITLE);
+      if (clean) nextRooms[index] = clean;
+    }
+    this.data = {
+      seats: Object.fromEntries(seats.map(({ sessionId, seat }) => [sessionId, seat])),
+      rooms: nextRooms,
+    };
+    this.save();
+  }
+
   setRoomTitle(index: number, title: string): void {
     const clean = title.trim().slice(0, MAX_ROOM_TITLE);
     if (clean) this.data.rooms[String(index)] = clean;

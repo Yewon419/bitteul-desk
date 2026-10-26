@@ -13,17 +13,19 @@ import { LAYOUT_FILE_DIR } from './constants.js';
 const FILE_NAME = 'bitteul-desk.json';
 const MAX_NAME = 20;
 const DEFAULT_USER_NAME = '나';
-const DEFAULT_BOARD_TITLE = '빛뜰 데스크';
-const DEFAULT_COUNTDOWN_LABEL = '마감까지';
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+export const MAX_BOARD_TEXT = 300;
+/** Fields of the old fixed-layout board; dropped from the file the next time the board is saved. */
+const OLD_BOARD_FIELDS = [
+  'boardTitle',
+  'countdownLabel',
+  'countdownDate',
+  'salaryThisMonth',
+  'salaryTarget',
+];
 
 export interface DeskProfile {
   userName: string;
-  board: {
-    title: string;
-    countdown: { label: string; date: string } | null;
-    salary: { thisMonth: number; target: number } | null;
-  };
+  board: { text: string };
 }
 
 export class DeskProfileError extends Error {}
@@ -41,29 +43,15 @@ function text(raw: Record<string, unknown>, key: string, fallback: string, file:
   return value.trim();
 }
 
-function amount(raw: Record<string, unknown>, key: string, file: string): number {
-  const value = raw[key];
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throw new DeskProfileError(`${file}: "${key}" must be a number of 0 or more`);
+function boardText(raw: Record<string, unknown>, file: string): string {
+  const value = raw.boardText;
+  if (value === undefined) return '';
+  if (typeof value !== 'string' || value.trim().length > MAX_BOARD_TEXT) {
+    throw new DeskProfileError(
+      `${file}: "boardText" must be text of up to ${MAX_BOARD_TEXT} characters`,
+    );
   }
-  return value;
-}
-
-function countdown(raw: Record<string, unknown>, file: string): DeskProfile['board']['countdown'] {
-  const date = raw.countdownDate;
-  if (date === undefined) return null;
-  if (typeof date !== 'string' || !DATE_RE.test(date) || Number.isNaN(Date.parse(date))) {
-    throw new DeskProfileError(`${file}: "countdownDate" must be a date like 2027-08-31`);
-  }
-  return { label: text(raw, 'countdownLabel', DEFAULT_COUNTDOWN_LABEL, file), date };
-}
-
-function salary(raw: Record<string, unknown>, file: string): DeskProfile['board']['salary'] {
-  if (raw.salaryTarget === undefined && raw.salaryThisMonth === undefined) return null;
-  const target = amount(raw, 'salaryTarget', file);
-  if (target === 0) throw new DeskProfileError(`${file}: "salaryTarget" must be above 0`);
-  const thisMonth = raw.salaryThisMonth === undefined ? 0 : amount(raw, 'salaryThisMonth', file);
-  return { thisMonth, target };
+  return value.trim();
 }
 
 /** The profile file as written; a missing file is an empty profile, a broken one throws. */
@@ -86,11 +74,7 @@ function readRawProfile(file: string): Record<string, unknown> {
 function parseDeskProfile(raw: Record<string, unknown>, file: string): DeskProfile {
   return {
     userName: text(raw, 'userName', DEFAULT_USER_NAME, file),
-    board: {
-      title: text(raw, 'boardTitle', DEFAULT_BOARD_TITLE, file),
-      countdown: countdown(raw, file),
-      salary: salary(raw, file),
-    },
+    board: { text: boardText(raw, file) },
   };
 }
 
@@ -99,16 +83,10 @@ export function readDeskProfile(file: string = deskProfilePath()): DeskProfile {
   return parseDeskProfile(readRawProfile(file), file);
 }
 
-export const BOARD_FIELDS = [
-  'boardTitle',
-  'countdownLabel',
-  'countdownDate',
-  'salaryThisMonth',
-  'salaryTarget',
-] as const;
-
-/** One wall-board edit: a value sets the field, null removes it, a missing key leaves it. */
-export type BoardPatch = Partial<Record<(typeof BOARD_FIELDS)[number], string | number | null>>;
+/** One wall-board edit: text replaces the board, null or empty clears it, a missing key leaves it. */
+export interface BoardPatch {
+  boardText?: string | null;
+}
 
 /**
  * Apply a wall-board edit from the office. The merged file is validated with the same
@@ -116,12 +94,10 @@ export type BoardPatch = Partial<Record<(typeof BOARD_FIELDS)[number], string | 
  */
 export function updateDeskBoard(patch: BoardPatch, file: string = deskProfilePath()): DeskProfile {
   const raw = readRawProfile(file);
-  for (const key of BOARD_FIELDS) {
-    const value = patch[key];
-    if (value === undefined) continue;
-    if (value === null || value === '') delete raw[key];
-    else raw[key] = value;
-  }
+  for (const key of OLD_BOARD_FIELDS) delete raw[key];
+  const value = patch.boardText;
+  if (value === null || value?.trim() === '') delete raw.boardText;
+  else if (value !== undefined) raw.boardText = value.trim();
   const profile = parseDeskProfile(raw, file);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;

@@ -21,8 +21,7 @@ import {
   ALERT_BLINK_MS,
   BLINK_EVERY_MS,
   BLINK_MS,
-  BOARD_PREVIEW_H,
-  BOARD_PREVIEW_W,
+  BOARD_HINT,
   BUBBLE_ALERT_BG,
   BUBBLE_BG,
   BUBBLE_BORDER,
@@ -74,16 +73,13 @@ import {
   SIGN_MIN_W,
   SIGN_TEXT,
   SIGN_Y,
+  TIDY_RETRY_MS,
   TITLE_LINE_H,
   TITLE_LINES,
   TITLE_POLL_MS,
   TYPE_FRAME_MS,
-  WALL_ACCENT,
   WALL_BG,
-  WALL_GAUGE_FILL,
-  WALL_GAUGE_TRACK,
   WALL_LABEL,
-  WALL_TITLE,
   WALL_VALUE,
 } from './constants.js';
 import {
@@ -97,7 +93,7 @@ import {
 } from './idle.js';
 import { READING_TOOLS, toolLabel } from './labels.js';
 import { pushIsOn, pushSupport, turnPushOff, turnPushOn } from './push.js';
-import { dropMoves, planSeats, type SeatPlan } from './seating.js';
+import { dropMoves, planSeats, type SeatPlan, tidyRooms } from './seating.js';
 import { initTeamModal, type TeamRoomPick } from './teamModal.js';
 import {
   type DeskMood,
@@ -132,12 +128,18 @@ type StaffFrames = Record<Pose, HTMLImageElement[][]>;
 const STAFF_FRAMES = ['a', 'b', 'c', 'd', 'e', 'f'];
 
 interface Board {
-  title: string;
-  countdown: { label: string; date: string } | null;
-  salary: { thisMonth: number; target: number } | null;
+  text: string;
 }
 
-const DEFAULT_BOARD: Board = { title: '빛뜰 데스크', countdown: null, salary: null };
+const DEFAULT_BOARD: Board = { text: '' };
+/** Largest first: the board uses the biggest size its text fits at. */
+const BOARD_FONTS: Array<[font: string, lineHeight: number]> = [
+  [FONT_BIG, 28],
+  [FONT_TITLE, 22],
+  [FONT_BODY, 15],
+  [FONT_SMALL, 12],
+];
+const BOARD_PAD = 5;
 
 interface Tool {
   name?: string;
@@ -559,17 +561,33 @@ function drawBubble(
   ctx.restore();
 }
 
-function daysUntil(deadline: string): number {
-  const end = new Date(`${deadline}T23:59:59`);
-  const now = new Date();
-  return Math.max(0, Math.ceil((end.getTime() - now.getTime()) / 86_400_000));
+/** Break text into lines that fit `maxW`: at spaces when it can, mid-word when it must. */
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const lines: string[] = [];
+  for (const paragraph of text.split('\n')) {
+    let line = '';
+    for (const word of paragraph.split(/(?<=\s)/)) {
+      if (ctx.measureText(line + word).width <= maxW) {
+        line += word;
+        continue;
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+      line = '';
+      for (const ch of Array.from(word.trimStart())) {
+        if (line && ctx.measureText(line + ch).width > maxW) {
+          lines.push(line);
+          line = '';
+        }
+        line += ch;
+      }
+    }
+    lines.push(line.trimEnd());
+  }
+  return lines;
 }
 
-function won(n: number): string {
-  return `${n.toLocaleString('ko-KR')}원`;
-}
-
-function drawWallContent(board: Board, working: number, w: number, h: number): HTMLCanvasElement {
+/** Whatever the user wrote, as large as it fits; a hint stands in on an empty board. */
+function drawWallContent(board: Board, w: number, h: number, hint: string): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
@@ -580,44 +598,23 @@ function drawWallContent(board: Board, working: number, w: number, h: number): H
   ctx.fillRect(0, 0, w, h);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  const mid = w / 2;
-  ctx.fillStyle = WALL_TITLE;
-  ctx.font = FONT_BOLD;
-  ctx.fillText(board.title, mid, 12);
-  let y = 44;
-  if (board.countdown) {
-    ctx.fillStyle = WALL_LABEL;
-    ctx.font = FONT_SMALL;
-    ctx.fillText(board.countdown.label, mid, y);
-    ctx.fillStyle = WALL_ACCENT;
-    ctx.font = FONT_BIG;
-    ctx.fillText(`D-${daysUntil(board.countdown.date)}`, mid, y + 14);
-    y += 60;
+  const text = board.text || hint;
+  if (!text) return c;
+  const maxW = w - BOARD_PAD * 2;
+  const maxH = h - BOARD_PAD * 2;
+  let lines: string[] = [];
+  let lineHeight = 0;
+  for (const [font, lh] of BOARD_FONTS) {
+    ctx.font = font;
+    lines = wrapText(ctx, text, maxW);
+    lineHeight = lh;
+    if (lines.length * lh <= maxH) break;
   }
-  if (board.salary) {
-    ctx.fillStyle = WALL_LABEL;
-    ctx.font = FONT_SMALL;
-    ctx.fillText('이번 달 월급', mid, y);
-    ctx.fillStyle = WALL_VALUE;
-    ctx.font = FONT_BOLD;
-    ctx.fillText(won(board.salary.thisMonth), mid, y + 14);
-    const barW = w - 16;
-    const ratio = Math.min(1, board.salary.thisMonth / board.salary.target);
-    ctx.fillStyle = WALL_GAUGE_TRACK;
-    ctx.fillRect(8, y + 34, barW, 8);
-    ctx.fillStyle = WALL_GAUGE_FILL;
-    ctx.fillRect(8, y + 34, Math.round(barW * ratio), 8);
-    ctx.fillStyle = WALL_LABEL;
-    ctx.font = FONT_SMALL;
-    ctx.fillText(`목표 ${won(board.salary.target)}`, mid, y + 48);
-    y += 84;
-  }
-  ctx.fillStyle = WALL_LABEL;
-  ctx.font = FONT_SMALL;
-  ctx.fillText('근무 중인 직원', mid, y);
-  ctx.fillStyle = WALL_VALUE;
-  ctx.font = FONT_BODY;
-  ctx.fillText(`${working}명 (AI)`, mid, y + 14);
+  const fit = Math.max(1, Math.floor(maxH / lineHeight));
+  if (lines.length > fit) lines = [...lines.slice(0, fit - 1), `${lines[fit - 1]}…`];
+  ctx.fillStyle = board.text ? WALL_VALUE : WALL_LABEL;
+  const top = Math.round((h - lines.length * lineHeight) / 2);
+  lines.forEach((line, i) => ctx.fillText(line, w / 2, top + i * lineHeight, maxW));
   return c;
 }
 
@@ -625,12 +622,12 @@ function drawWall(
   ctx: CanvasRenderingContext2D,
   layout: SceneLayout,
   board: Board,
-  working: number,
+  hint: string,
 ): void {
   const q = layout.wall;
   const w = q.x1 - q.x0 + 1;
   const h = q.y1 - q.y0 + 1;
-  const content = drawWallContent(board, working, w, h);
+  const content = drawWallContent(board, w, h, hint);
   for (let i = 0; i < w; i++) {
     const t = i / (w - 1);
     const top = q.y0 + (q.y2 - q.y0) * t;
@@ -944,6 +941,13 @@ async function start(): Promise<void> {
   const storedSeats = new Map<number, number>();
   const roomTitles = new Map<number, string>();
   const lastSeat = new Map<number, number>();
+  /** Tidying waits for a fresh scene poll, so it never acts on seats it just changed. */
+  let sceneFresh = false;
+  let tidying = false;
+  /** After a failed tidy, wait before trying again (e.g. a server too old to take it). */
+  let tidyPausedUntil = 0;
+  /** Bumped when this viewer changes the arrangement; a poll sent before that is stale. */
+  let sceneGen = 0;
   const token = new URLSearchParams(window.location.search).get('token');
   const hire = document.getElementById('hire');
   const teamBtn = document.getElementById('team');
@@ -977,16 +981,53 @@ async function start(): Promise<void> {
 
   const pollScene = async (): Promise<void> => {
     try {
+      const gen = sceneGen;
       const data = await loadJson<{ seats: Record<string, number>; rooms: Record<string, string> }>(
         './api/scene/state',
       );
+      if (gen !== sceneGen) return;
       storedSeats.clear();
       Object.entries(data.seats).forEach(([id, seat]) => storedSeats.set(Number(id), seat));
       roomTitles.clear();
       Object.entries(data.rooms).forEach(([room, title]) => roomTitles.set(Number(room), title));
+      sceneFresh = true;
     } catch (err) {
       console.error('[Scene] scene state poll failed', err);
     }
+  };
+
+  /**
+   * Someone went home and left an empty room between occupied ones: pull the rooms together.
+   * Only when the office and the dashboard list agree on who is here, so a half-loaded list
+   * after a reconnect cannot shuffle everyone.
+   */
+  const tidy = (seated: Map<number, number>): void => {
+    if (!token || tidying || !sceneFresh || !seated.size || Date.now() < tidyPausedUntil) return;
+    if (metas.size !== agents.size || [...agents.keys()].some((id) => !metas.has(id))) return;
+    const next = tidyRooms(seated, roomTitles, perRoom);
+    if (!next) return;
+    tidying = true;
+    sceneFresh = false;
+    // Seats change on screen only once the server has them, so a refused tidy moves no one.
+    postJson('./api/dashboard/arrangement', token, {
+      seats: [...next.seats].map(([agentId, seat]) => ({ agentId, seat })),
+      rooms: Object.fromEntries(next.rooms),
+    })
+      .then(() => {
+        sceneGen += 1;
+        storedSeats.clear();
+        next.seats.forEach((seat, id) => storedSeats.set(id, seat));
+        roomTitles.clear();
+        next.rooms.forEach((title, room) => roomTitles.set(room, title));
+      })
+      .catch((err: unknown) => {
+        tidyPausedUntil = Date.now() + TIDY_RETRY_MS;
+        console.error('[Scene] tidying rooms failed', err);
+      })
+      .finally(() => {
+        tidying = false;
+        void pollScene();
+      });
   };
   void pollScene();
   window.setInterval(() => void pollScene(), TITLE_POLL_MS);
@@ -1066,50 +1107,24 @@ async function start(): Promise<void> {
   const boardForm = document.getElementById('board-form') as HTMLFormElement | null;
   const boardPreview = document.getElementById('board-preview') as HTMLCanvasElement | null;
   const boardError = document.getElementById('board-error');
-  const workingNow = (): number =>
-    [...agents.values()].filter((a) => moodOf(a) !== 'resting').length;
-  const field = (name: string): HTMLInputElement | null =>
-    boardForm?.elements.namedItem(name) as HTMLInputElement | null;
-
-  const draftBoard = (): Board => {
-    const title = field('boardTitle')?.value.trim() || DEFAULT_BOARD.title;
-    const date = field('countdownDate')?.value ?? '';
-    const label = field('countdownLabel')?.value.trim() || '마감까지';
-    const target = Number(field('salaryTarget')?.value || 0);
-    const thisMonth = Number(field('salaryThisMonth')?.value || 0);
-    return {
-      title,
-      countdown: date ? { label, date } : null,
-      salary: target > 0 ? { thisMonth, target } : null,
-    };
-  };
+  const boardText = boardForm?.elements.namedItem('boardText') as HTMLTextAreaElement | null;
+  // The preview is the wall itself, flattened: same size, so lines break where they will on the wall.
+  const wallW = wallQ.x1 - wallQ.x0 + 1;
+  const wallH = wallQ.y1 - wallQ.y0 + 1;
 
   const renderBoardPreview = (shown: Board): void => {
     if (!boardPreview) return;
-    const scale = Math.max(
-      2,
-      Math.floor(Math.min(window.innerHeight * 0.7, 640) / BOARD_PREVIEW_H),
-    );
-    boardPreview.width = BOARD_PREVIEW_W;
-    boardPreview.height = BOARD_PREVIEW_H;
-    boardPreview.style.width = `${BOARD_PREVIEW_W * scale}px`;
-    boardPreview.style.height = `${BOARD_PREVIEW_H * scale}px`;
-    boardPreview
-      .getContext('2d')
-      ?.drawImage(drawWallContent(shown, workingNow(), BOARD_PREVIEW_W, BOARD_PREVIEW_H), 0, 0);
+    const scale = Math.max(2, Math.floor(Math.min(window.innerHeight * 0.7, 640) / wallH));
+    boardPreview.width = wallW;
+    boardPreview.height = wallH;
+    boardPreview.style.width = `${wallW * scale}px`;
+    boardPreview.style.height = `${wallH * scale}px`;
+    boardPreview.getContext('2d')?.drawImage(drawWallContent(shown, wallW, wallH, ''), 0, 0);
   };
 
   const openBoard = (): void => {
     if (!boardModal) return;
-    const set = (name: string, value: string): void => {
-      const input = field(name);
-      if (input) input.value = value;
-    };
-    set('boardTitle', board.title === DEFAULT_BOARD.title ? '' : board.title);
-    set('countdownLabel', board.countdown?.label ?? '');
-    set('countdownDate', board.countdown?.date ?? '');
-    set('salaryThisMonth', board.salary ? String(board.salary.thisMonth) : '');
-    set('salaryTarget', board.salary ? String(board.salary.target) : '');
+    if (boardText) boardText.value = board.text;
     if (boardError) boardError.textContent = '';
     if (boardForm) boardForm.hidden = !token;
     const readonly = document.getElementById('board-readonly');
@@ -1121,22 +1136,13 @@ async function start(): Promise<void> {
     if (boardModal) boardModal.hidden = true;
   };
 
-  boardForm?.addEventListener('input', () => renderBoardPreview(draftBoard()));
+  boardForm?.addEventListener('input', () =>
+    renderBoardPreview({ text: boardText?.value.trim() ?? '' }),
+  );
   boardForm?.addEventListener('submit', (ev) => {
     ev.preventDefault();
     if (!token) return;
-    const text = (name: string): string | null => field(name)?.value.trim() || null;
-    const amount = (name: string): number | null => {
-      const raw = field(name)?.value ?? '';
-      return raw === '' ? null : Number(raw);
-    };
-    const patch = {
-      boardTitle: text('boardTitle'),
-      countdownLabel: text('countdownLabel'),
-      countdownDate: text('countdownDate'),
-      salaryThisMonth: amount('salaryThisMonth'),
-      salaryTarget: amount('salaryTarget'),
-    };
+    const patch = { boardText: boardText?.value.trim() || null };
     postJson<{ board: Board }>('./api/dashboard/profile/board', token, patch)
       .then((saved) => {
         board = saved.board;
@@ -1398,6 +1404,12 @@ async function start(): Promise<void> {
       perFloor,
       blocked,
     );
+    const seated = new Map(plan.seatOf);
+    offices.forEach((leadId) => {
+      const seat = firstPlan.seatOf.get(leadId);
+      if (seat !== undefined) seated.set(leadId, seat);
+    });
+    tidy(seated);
     const neededFloors = Math.max(
       plan.floors,
       Math.ceil((Math.max(-1, ...offices.keys()) + 1) / layout.rooms),
@@ -1408,7 +1420,6 @@ async function start(): Promise<void> {
     }
     const factor = canvas.width / sceneW;
     const viewY = viewTop();
-    const working = ordered.filter((a) => moodOf(a) !== 'resting').length;
     const bubbles: Array<[number, number, string, boolean, boolean]> = [];
     const chatOpenFor = (id: number): boolean => {
       const sessionId = metas.get(id)?.sessionId;
@@ -1540,7 +1551,7 @@ async function start(): Promise<void> {
             ]);
           });
         ambient.drawFront(ctx, roomT);
-        if (globalRoom === 0) drawWall(ctx, layout, board, working);
+        if (globalRoom === 0) drawWall(ctx, layout, board, token ? BOARD_HINT : '');
         const sign = drawSign(ctx, roomW, roomTitles.get(globalRoom), !!token);
         if (sign) {
           signs.push({

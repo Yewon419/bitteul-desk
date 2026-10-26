@@ -25,9 +25,9 @@ import {
 } from './constants.js';
 import { ConversationCache, readSessionCwd } from './conversationView.js';
 import {
-  BOARD_FIELDS,
   type BoardPatch,
   DeskProfileError,
+  MAX_BOARD_TEXT,
   readDeskProfile,
   updateDeskBoard,
 } from './deskProfile.js';
@@ -755,9 +755,7 @@ function registerSceneRoutes(
         body: {
           type: 'object',
           additionalProperties: false,
-          properties: Object.fromEntries(
-            BOARD_FIELDS.map((key) => [key, { type: ['string', 'number', 'null'] }]),
-          ),
+          properties: { boardText: { type: ['string', 'null'], maxLength: MAX_BOARD_TEXT } },
         },
       },
     },
@@ -815,6 +813,57 @@ function registerSceneRoutes(
         moves.push({ sessionId: sessionOf(agent), seat });
       }
       scene.moveSeats(moves);
+      return { ok: true };
+    },
+  );
+
+  // The office after empty rooms are pulled together: every seated agent and every room sign.
+  app.post<{
+    Body: { seats: Array<{ agentId: number; seat: number }>; rooms: Record<string, string> };
+  }>(
+    '/api/dashboard/arrangement',
+    {
+      ...auth,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['seats', 'rooms'],
+          properties: {
+            seats: {
+              type: 'array',
+              maxItems: 1000,
+              items: {
+                type: 'object',
+                required: ['agentId', 'seat'],
+                properties: {
+                  agentId: { type: 'integer' },
+                  seat: { type: 'integer', minimum: 0, maximum: 999 },
+                },
+              },
+            },
+            rooms: {
+              type: 'object',
+              maxProperties: 1000,
+              additionalProperties: { type: 'string', maxLength: MAX_ROOM_TITLE },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      if (!scene) return reply.code(503).send({ error: 'scene state unavailable' });
+      const seats = [];
+      for (const { agentId, seat } of request.body.seats) {
+        const agent = options.store.get(agentId);
+        if (!agent) return reply.code(404).send({ error: `no agent ${agentId}` });
+        seats.push({ sessionId: sessionOf(agent), seat });
+      }
+      try {
+        scene.arrange(seats, request.body.rooms);
+      } catch (err) {
+        return reply.code(400).send({ error: String(err) });
+      }
+      app.log.info({ seats: seats.length }, 'dashboard: empty rooms tidied');
       return { ok: true };
     },
   );
