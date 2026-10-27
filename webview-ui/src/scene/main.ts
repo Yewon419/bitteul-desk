@@ -604,12 +604,19 @@ function drawWallContent(board: Board, w: number, h: number, hint: string): HTML
   const maxH = h - BOARD_PAD * 2;
   let lines: string[] = [];
   let lineHeight = 0;
-  for (const [font, lh] of BOARD_FONTS) {
-    ctx.font = font;
-    lines = wrapText(ctx, text, maxW);
-    lineHeight = lh;
-    if (lines.length * lh <= maxH) break;
-  }
+  const words = text.split(/\s+/).filter(Boolean);
+  // A size that keeps every word whole wins; only text that cannot fit that way breaks words.
+  const pick = (wholeWords: boolean): boolean => {
+    for (const [font, lh] of BOARD_FONTS) {
+      ctx.font = font;
+      if (wholeWords && words.some((word) => ctx.measureText(word).width > maxW)) continue;
+      lines = wrapText(ctx, text, maxW);
+      lineHeight = lh;
+      if (lines.length * lh <= maxH) return true;
+    }
+    return false;
+  };
+  if (!pick(true)) pick(false);
   const fit = Math.max(1, Math.floor(maxH / lineHeight));
   if (lines.length > fit) lines = [...lines.slice(0, fit - 1), `${lines[fit - 1]}…`];
   ctx.fillStyle = board.text ? WALL_VALUE : WALL_LABEL;
