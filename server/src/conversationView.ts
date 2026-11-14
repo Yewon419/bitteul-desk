@@ -217,12 +217,6 @@ function parseLines(state: ParseState, jsonl: string, maxEntries: number): void 
           : null;
         if (answer) {
           entries.push({ kind: 'user', text: answer, timestamp: rec.timestamp });
-          continue;
-        }
-        // A tool's output ("saved to out.png") belongs to the tool call before it.
-        const last = entries[entries.length - 1];
-        if (last?.kind === 'tool' && results.length) {
-          withMedia(last, blockText(results), rec.cwd);
         }
       }
     } else if (rec.type === 'attachment' && rec.attachment?.type === 'queued_command') {
@@ -252,14 +246,9 @@ function parseLines(state: ParseState, jsonl: string, maxEntries: number): void 
             timestamp: rec.timestamp,
           });
         } else if (block.type === 'tool_use') {
-          const entry: ConversationEntry = {
-            kind: 'tool',
-            text: toolLine(block),
-            timestamp: rec.timestamp,
-          };
-          const inputs = Object.values(block.input ?? {}).filter((v) => typeof v === 'string');
-          withMedia(entry, inputs.join('\n'), rec.cwd);
-          entries.push(entry);
+          // Pictures the agent only opened or wrote with a tool are its working files; the chat
+          // previews what the user sent and what the agent names in its reply.
+          entries.push({ kind: 'tool', text: toolLine(block), timestamp: rec.timestamp });
         }
       }
     }

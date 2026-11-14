@@ -267,6 +267,37 @@ describe('dashboard routes', () => {
     expect(convo.entries.at(-1)?.media).toMatchObject([{ path: pic, kind: 'image' }]);
   });
 
+  it('does not preview pictures the agent only opened or wrote with a tool', async () => {
+    const read = path.join(dir, 'reference.png');
+    const saved = path.join(dir, 'saved.png');
+    fs.writeFileSync(read, 'READ');
+    fs.writeFileSync(saved, 'SAVED');
+    fs.appendFileSync(
+      path.join(dir, 'session.jsonl'),
+      `\n${jsonl([
+        {
+          type: 'assistant',
+          message: {
+            content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: read } }],
+          },
+        },
+        {
+          type: 'user',
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'r1', content: `saved to ${saved}` }],
+          },
+        },
+      ])}`,
+    );
+    const convo = (await (
+      await fetch(url('/api/dashboard/agents/7/conversation'), { headers: auth })
+    ).json()) as { entries: Array<{ kind: string; media?: unknown[] }> };
+    expect(convo.entries.filter((e) => e.media?.length)).toEqual([]);
+    const media = (p: string) => url(`/api/dashboard/agents/7/media?path=${encodeURIComponent(p)}`);
+    expect((await fetch(media(read), { headers: auth })).status).toBe(404);
+    expect((await fetch(media(saved), { headers: auth })).status).toBe(404);
+  });
+
   it('refuses requests without the server token', async () => {
     expect((await fetch(url('/api/dashboard/agents'))).status).toBe(401);
     expect((await fetch(url('/api/dashboard/agents/7/conversation'))).status).toBe(401);

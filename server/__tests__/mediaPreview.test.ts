@@ -37,7 +37,7 @@ describe('findMediaPaths', () => {
 });
 
 describe('media in conversations', () => {
-  it('attaches files from text, tool input and tool output, and describes only existing ones', () => {
+  it('attaches files the reply names, not tool input or output, and describes only existing ones', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bitteul-media-'));
     dirs.push(dir);
     const shot = path.join(dir, 'shot.png');
@@ -72,13 +72,9 @@ describe('media in conversations', () => {
         .join('\n'),
       100,
     );
-    expect(view.entries[0].media).toEqual([
-      path.join(dir, 'in.mov'),
-      path.join(dir, 'clip.mp4'),
-      shot,
-    ]);
+    expect(view.entries[0].media).toBeUndefined();
     expect(view.entries[1].media).toEqual([shot]);
-    const described = describeMedia(view.entries[0].media ?? []);
+    const described = describeMedia([path.join(dir, 'clip.mp4'), shot]);
     expect(described).toMatchObject([{ path: shot, name: 'shot.png', kind: 'image', size: 3 }]);
   });
 });
