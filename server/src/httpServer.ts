@@ -107,6 +107,21 @@ export interface HttpServerHandle {
 const startTime = Date.now();
 
 /**
+ * Autostart redirects stdout into the log file. On a full disk pino's own stream rethrows the
+ * failed write as an unhandled 'error' event and the whole server exits, so a log line that
+ * cannot be written is dropped instead.
+ */
+const logDestination = {
+  write(line: string): void {
+    try {
+      fs.writeSync(process.stdout.fd, line);
+    } catch {
+      // Nowhere left to report it: stderr goes to the same file.
+    }
+  },
+};
+
+/**
  * Create a Fastify server with hook endpoint, health check, and WebSocket support.
  *
  * All Fastify-specific code lives in this file. The rest of the server layer is
@@ -114,7 +129,7 @@ const startTime = Date.now();
  */
 export async function createHttpServer(options: HttpServerOptions): Promise<HttpServerHandle> {
   const app = Fastify({
-    logger: !options.embedded,
+    logger: options.embedded ? false : { stream: logDestination },
     // The dashboard polls several routes every few seconds; logging each request filled the
     // autostart log by ~250MB a day. Warnings and errors are still logged.
     disableRequestLogging: true,
@@ -215,6 +230,9 @@ function registerDashboardRoutes(
   scene: SceneState | null,
 ): void {
   const conversations = new ConversationCache(DASHBOARD_MAX_ENTRIES);
+  // The agent list is polled every few seconds; a transcript deleted under a live agent
+  // logged one warning per poll and grew the autostart log to 400MB.
+  const unreadableWarned = new Set<string>();
   const managed = createManagedSessions(app, options);
   const auth = { preHandler: bearerAuth(options.token) };
   const sessionOf = (agent: AgentState): string => path.basename(agent.jsonlFile, '.jsonl');
@@ -320,11 +338,15 @@ function registerDashboardRoutes(
       let transcriptModel: string | null = null;
       try {
         ({ title, model: transcriptModel } = conversations.get(agent.jsonlFile));
+        unreadableWarned.delete(agent.jsonlFile);
       } catch (err) {
-        app.log.warn(
-          { err, id: agent.id, file: agent.jsonlFile },
-          'dashboard: transcript unreadable',
-        );
+        if (!unreadableWarned.has(agent.jsonlFile)) {
+          unreadableWarned.add(agent.jsonlFile);
+          app.log.warn(
+            { err, id: agent.id, file: agent.jsonlFile },
+            'dashboard: transcript unreadable',
+          );
+        }
       }
       const sessionId = sessionOf(agent);
       agents.push({
